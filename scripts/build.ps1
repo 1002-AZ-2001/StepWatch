@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param()
+param([switch]$SingleFile)
 
 $ErrorActionPreference = "Stop"
 if ($env:OS -ne "Windows_NT") {
@@ -24,6 +24,10 @@ try {
     Invoke-Checked -Arguments @("-m", "pip", "install", "-r", "requirements-dev.txt")
     Invoke-Checked -Arguments @("-m", "unittest", "discover", "-s", "tests", "-v")
     Invoke-Checked -Arguments @("-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", "StepWatch", "--paths", $ProjectRoot, "--manifest", (Join-Path $PSScriptRoot "StepWatch.manifest"), "--collect-submodules", "pynput", "stepwatch\__main__.py")
+    if ($SingleFile) {
+        Invoke-Checked -Arguments @("-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--onefile", "--name", "StepWatch-singlefile", "--paths", $ProjectRoot, "--manifest", (Join-Path $PSScriptRoot "StepWatch.manifest"), "--collect-submodules", "pynput", "stepwatch\__main__.py")
+        Write-Host "Exécutable autonome : dist\StepWatch-singlefile.exe"
+    }
     Write-Host "Application compilée : dist\StepWatch\StepWatch.exe"
     Write-Host "Distribuez tout le dossier dist\StepWatch, puis effectuez la validation Windows décrite dans le README."
 } finally {

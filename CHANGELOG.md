@@ -1,5 +1,11 @@
 # Journal des modifications
 
+## Non publié
+
+- GitHub Actions prépare une distribution portable et un exécutable unique pour Windows, ainsi qu'un paquet `.deb` amd64 pour Linux. Les builds sont déclenchés par les push vers `main`, les pull requests, les tags `v*` ou manuellement ; un tag égal à la version du projet permet une publication dans les Releases après réussite.
+- Le paquet Linux embarque Python, ajoute un raccourci et déclare les dépendances système ; l'import ShareX et les rapports sont disponibles, tandis que l'enregistrement reste réservé à Windows. Le minimum glibc tient compte du système de compilation, avec un plancher à 2.35.
+- Tests de structure du paquet Debian, des permissions, des dépendances et du rejet des liens sortants ; documentation du téléchargement des artefacts et de l'installation.
+
 ## 0.2.0 — 2026-11-07
 
 Intègre les correctifs et améliorations issus de l'audit Claude fourni par l'utilisateur, puis revus dans le dépôt. Les appels natifs, les scripts PowerShell et l'exécutable restent à valider sur Windows réel.

@@ -1,6 +1,6 @@
 """GUI integration checks on a real Tk display, with simulated Windows APIs.
 
-Opt in with STEPWATCH_GUI_TESTS=1 and DISPLAY (for example Xorg/Xvfb).
+Opt in with STEPWATCH_GUI_TESTS=1 and a Windows desktop or DISPLAY (Xorg/Xvfb).
 These tests never claim to exercise actual Windows hooks or capture.
 """
 
@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import queue
 import re
+import sys
 import tempfile
 import tkinter as tk
 import unittest
@@ -22,8 +23,9 @@ from stepwatch.ui import StepWatchApp, run_app
 
 
 @unittest.skipUnless(
-    os.environ.get("STEPWATCH_GUI_TESTS") == "1" and os.environ.get("DISPLAY"),
-    "Interface : activer STEPWATCH_GUI_TESTS=1 avec un affichage DISPLAY.",
+    os.environ.get("STEPWATCH_GUI_TESTS") == "1"
+    and (sys.platform == "win32" or os.environ.get("DISPLAY")),
+    "Interface : activer STEPWATCH_GUI_TESTS=1 avec un bureau Windows ou DISPLAY.",
 )
 class UITests(unittest.TestCase):
     def setUp(self):
@@ -124,10 +126,10 @@ class UITests(unittest.TestCase):
         width, height, x, y = map(int, re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)",
                                                 self.root.geometry()).groups())
         self.assertLessEqual(x + width, 1366)
-        self.assertLessEqual(y + height, 768 - 100)
+        self.assertLessEqual(y + height, 768 - self.app._px(100))
         min_width, min_height = self.root.minsize()
         self.assertLessEqual(min_width, 1366)
-        self.assertLessEqual(min_height, 768 - 100)
+        self.assertLessEqual(min_height, 768 - self.app._px(100))
 
     def test_pixel_dimensions_follow_dpi(self):
         top = tk.Toplevel(self.root)
@@ -185,6 +187,7 @@ class UITests(unittest.TestCase):
     def test_preview_requested_size_does_not_follow_the_image(self):
         self.root.geometry("1190x820")
         self.root.update()
+        initial_requested_height = self.app.preview.winfo_reqheight()
         renders = []
         real_photo = ImageTk.PhotoImage
 
@@ -197,7 +200,7 @@ class UITests(unittest.TestCase):
                                     "kept": 1, "ignored": 0, "message": "Capture"})
             for _ in range(10):
                 self.root.update()
-        self.assertLessEqual(self.app.preview.winfo_reqheight(), 20)
+        self.assertLessEqual(self.app.preview.winfo_reqheight(), initial_requested_height)
         self.assertLessEqual(len(renders), 2)
         width, height = renders[-1]
         self.assertLessEqual(width, self.app.preview.winfo_width())

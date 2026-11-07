@@ -166,6 +166,15 @@ class StandaloneReportTests(unittest.TestCase):
                         "Double-clic gauche local.", click_count=2)
         self.store.close()
 
+    def make_symlink(self, link, target, *, target_is_directory=False):
+        """Exercise Windows links too when the runner has the required privilege."""
+        try:
+            link.symlink_to(target, target_is_directory=target_is_directory)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Privilège Windows de création de liens symboliques absent (1314).")
+            raise
+
     def test_single_file_embeds_each_png_byte_for_byte(self):
         path = export_standalone(self.store.directory)
         self.assertEqual(path.name, "rapport-autonome.html")
@@ -196,13 +205,12 @@ class StandaloneReportTests(unittest.TestCase):
         self.assertFalse((self.store.directory / "rapport-autonome.html").exists())
         self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
 
-    @unittest.skipIf(os.name == "nt", "Les liens symboliques exigent un privilège sous Windows.")
     def test_symbolic_link_out_of_the_session_is_refused(self):
         outside = self.root / "outside.png"
         Image.new("RGB", (2, 2)).save(outside)
         capture = self.store.directory / "captures" / "000001.png"
         capture.unlink()
-        capture.symlink_to(outside)
+        self.make_symlink(capture, outside)
         with self.assertRaisesRegex(StorageError, "hors du dossier captures"):
             export_standalone(self.store.directory)
 
@@ -223,23 +231,21 @@ class StandaloneReportTests(unittest.TestCase):
                 export_standalone(self.store.directory)
         self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
 
-    @unittest.skipIf(os.name == "nt", "Les liens symboliques exigent un privilège sous Windows.")
     def test_capture_directory_symlink_outside_the_session_is_refused(self):
         captures = self.store.directory / "captures"
         outside = self.root / "outside-captures"
         captures.rename(outside)
-        captures.symlink_to(outside, target_is_directory=True)
+        self.make_symlink(captures, outside, target_is_directory=True)
         with self.assertRaisesRegex(StorageError, "hors du dossier captures"):
             export_standalone(self.store.directory)
         self.assertFalse((self.store.directory / "rapport-autonome.html").exists())
         self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
 
-    @unittest.skipIf(os.name == "nt", "Les liens symboliques exigent un privilège sous Windows.")
     def test_capture_symlink_to_another_capture_is_refused(self):
         captures = self.store.directory / "captures"
         first = captures / "000001.png"
         first.unlink()
-        first.symlink_to(captures / "000002.png")
+        self.make_symlink(first, captures / "000002.png")
         with self.assertRaisesRegex(StorageError, "hors du dossier captures"):
             export_standalone(self.store.directory)
 

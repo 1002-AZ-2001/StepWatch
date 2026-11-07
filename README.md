@@ -4,6 +4,30 @@ StepWatch documente une intervention informatique à partir des pixels visibles 
 
 **Le dépôt fourni était vide.** La version 0.1.0 a fourni la première implémentation du cahier des charges ; elle ne constituait pas une correction vérifiée du logiciel historique 1.0.1, dont les sources n'étaient pas présentes. La version actuelle **0.2.0** ajoute les correctifs et améliorations issus de l'audit Claude fourni par l'utilisateur : capture et interface plus robustes, regroupement des doubles-clics, rapport autonome et diagnostic local.
 
+## Télécharger les applications compilées
+
+Le workflow GitHub Actions [Tests et paquets Windows / Debian](https://github.com/1002-AZ-2001/StepWatch/actions/workflows/build.yml) prépare les distributions Windows et Linux sur leurs systèmes respectifs. Il se déclenche sur un push vers `main`, une pull request vers `main`, un tag `v*` et manuellement : dans **Actions**, sélectionnez le workflow puis **Run workflow**.
+
+Une fois l'exécution réussie, ouvrez son résumé et la section **Artifacts**, puis téléchargez l'archive Windows ou Linux. GitHub peut demander une connexion pour télécharger un artefact. Décompressez l'archive téléchargée pour accéder aux fichiers distribuables :
+
+- **`stepwatch-windows-x64`** : `StepWatch-0.2.0-windows-x64.exe` (un seul fichier), `StepWatch-0.2.0-windows-x64-portable.zip` et `SHA256SUMS-windows.txt`. L'archive portable contient `StepWatch.exe` et ses dépendances : extrayez-la et conservez son dossier entier. Python n'est pas nécessaire sur le poste utilisateur.
+- **`stepwatch-linux-amd64`** : `stepwatch_0.2.0_amd64.deb` et `SHA256SUMS-linux.txt`, avec Python et les dépendances applicatives embarqués. Le paquet vise Ubuntu 22.04 ou ultérieur et Debian 12 ou ultérieur, en architecture amd64 et avec une session graphique.
+
+Les artefacts sont conservés 30 jours ; les fichiers publiés dans une Release suivent le cycle de vie de cette Release. Les fichiers `SHA256SUMS-*` permettent de vérifier l'intégrité des téléchargements.
+
+**Sous Linux, seuls l'import ShareX et les rapports sont disponibles. L'interface refuse l'enregistrement : les hooks et la capture de fenêtre restent réservés à Windows.**
+
+Pour installer le paquet, depuis le dossier où le `.deb` a été extrait :
+
+```bash
+sudo apt install ./stepwatch_0.2.0_amd64.deb
+stepwatch
+```
+
+Le raccourci StepWatch est également ajouté au menu des applications. Le paquet place l'application dans `/opt/stepwatch` ; les interventions et journaux restent dans les dossiers de l'utilisateur. Les bibliothèques système X11 et de polices sont installées par `apt` si nécessaire. Un paquet construit localement sur une distribution plus récente peut demander une glibc plus récente que celui produit par la CI.
+
+Un tag correspondant exactement à la version de `pyproject.toml`, par exemple `v0.2.0`, publie aussi les fichiers dans les **[Releases](https://github.com/1002-AZ-2001/StepWatch/releases)** après réussite de la compilation. Le tag et la version doivent être mis à jour ensemble. Les autres exécutions fournissent des artefacts de CI. La présence du workflow dans le dépôt ne prouve pas qu'une exécution ou une publication a déjà réussi : consultez son état sur GitHub.
+
 ## Installation et lancement sous Windows
 
 Prérequis : Windows 10/11, Python 3.11 ou ultérieur (3.12 recommandé), installation officielle incluant Tcl/Tk et pip. Une connexion Internet est nécessaire pour installer les dépendances, puis l'application fonctionne localement. Exécutez les commandes depuis le dossier du dépôt dans PowerShell :
@@ -126,7 +150,35 @@ La compilation doit s'effectuer sur Windows, avec le même type d'architecture q
 
 Le script installe `requirements-dev.txt`, exécute les tests puis appelle PyInstaller. Il embarque explicitement `scripts/StepWatch.manifest` pour déclarer la gestion DPI par moniteur (`PerMonitorV2`, puis `PerMonitor`) dès le lancement de l'exécutable, avant l'initialisation de Python et de Tk. Le résultat se trouve dans `dist\StepWatch\StepWatch.exe`. Distribuez **tout le dossier** `dist\StepWatch`, pas seulement le fichier `.exe`. Aucun Python n'est requis sur le poste de destination pour cette distribution.
 
+Pour produire aussi l'exécutable unique utilisé par la CI :
+
+```powershell
+.\scripts\build.ps1 -SingleFile
+```
+
+Ce mode conserve la distribution portable et ajoute `dist\StepWatch-singlefile.exe`. L'exécutable unique extrait son environnement dans un dossier temporaire au lancement ; son premier démarrage peut être plus lent.
+
 Cette méthode prépare une application portable ; elle ne fournit pas d'installeur MSI, de signature de code ni de validation antivirus. Testez le résultat sur un poste Windows distinct. PyInstaller ne produit pas un `.exe` Windows depuis Linux.
+
+## Construire le paquet Linux
+
+Utilisez Ubuntu 22.04 amd64 pour retrouver la compatibilité de base de la CI. Prérequis de compilation : Python 3.11 ou ultérieur avec Tkinter, `dpkg-deb` et les dépendances de `requirements-dev.txt`. Dans un environnement de compilation Python 3.12 déjà disponible :
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python scripts/build_deb.py
+```
+
+Le script utilise PyInstaller puis crée `dist/stepwatch_0.2.0_amd64.deb` sans privilège root. Les fichiers installés portent les permissions appropriées et appartiennent à root dans l'archive. Il n'ajoute aucun script de maintenance exécuté à l'installation.
+
+Pour réutiliser un dossier `StepWatch` déjà créé par PyInstaller sur le même système de compilation :
+
+```bash
+.venv/bin/python scripts/build_deb.py --bundle dist/StepWatch --output dist
+```
+
+Les liens symboliques sortant du bundle sont refusés. Le paquet déclare un minimum glibc égal au maximum entre 2.35 et la version du système de compilation. Réutiliser un bundle provenant d'un système plus récent invaliderait cette estimation : reconstruisez-le sur le système cible de compilation. Une exécution des tests sous Linux ne valide pas les captures Windows.
 
 ## Architecture
 

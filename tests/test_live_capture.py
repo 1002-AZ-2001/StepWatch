@@ -6,6 +6,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
+import sys
 
 from PIL import Image
 
@@ -14,7 +15,8 @@ from stepwatch.models import CaptureConfig, CaptureTarget, Rect
 from stepwatch.storage import SessionStore
 
 
-@unittest.skipUnless(os.environ.get("STEPWATCH_GUI_TESTS") == "1" and os.environ.get("DISPLAY"),
+@unittest.skipUnless(sys.platform.startswith("linux")
+                     and os.environ.get("STEPWATCH_GUI_TESTS") == "1" and os.environ.get("DISPLAY"),
                      "Capture réelle Linux : affichage virtuel et STEPWATCH_GUI_TESTS=1 requis.")
 class LiveCaptureTests(unittest.TestCase):
     def test_visible_pixels_flow_through_mss_redaction_and_offline_export(self):
