@@ -1,15 +1,18 @@
+import base64
 import hashlib
 import json
 import os
+import re
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-from stepwatch.storage import SessionStore, StorageError, import_sharex
+from stepwatch.storage import (ReportWriteError, SessionStore, StorageError, _local_time,
+                               export_standalone, import_sharex)
 
 
 class StorageTests(unittest.TestCase):
@@ -65,6 +68,16 @@ class StorageTests(unittest.TestCase):
         self.assertLess(report.index("Étape 1"), report.index("Étape 2"))
         self.assertIn("Changement visuel détecté", report)
 
+    def test_click_count_is_saved_and_labels_the_report(self):
+        store = SessionStore(self.root, "Double-clic")
+        store.save(self.image, "local_click", (3, 4), "Double-clic gauche local.", click_count=2)
+        store.save(self.image, "visual_change")
+        data = json.loads((store.directory / "steps.json").read_text(encoding="utf-8"))
+        self.assertEqual([step["click_count"] for step in data["steps"]], [2, 0])
+        report = (store.directory / "rapport.html").read_text(encoding="utf-8")
+        self.assertIn("Étape 1 — Double-clic local", report)
+        self.assertIn("Étape 2 — Changement visuel détecté", report)
+
     def test_empty_session_report_and_repeated_close(self):
         store = SessionStore(self.root, "")
         store.close()
@@ -92,6 +105,43 @@ class StorageTests(unittest.TestCase):
         data = json.loads((store.directory / "steps.json").read_text(encoding="utf-8"))
         self.assertEqual(len(data["steps"]), 1)
 
+    def test_windows_sharing_violation_is_retried_then_reported(self):
+        store = SessionStore(self.root, "Verrou")
+        real_replace = os.replace
+        calls = []
+
+        def locked_once(source, destination):
+            calls.append(Path(destination).name)
+            if len(calls) == 1:
+                raise PermissionError(13, "fichier utilisé par un autre processus")
+            return real_replace(source, destination)
+
+        with patch("stepwatch.storage._REPLACE_ATTEMPTS", 3), \
+                patch("stepwatch.storage._REPLACE_DELAY", 0), \
+                patch("stepwatch.storage.os.replace", side_effect=locked_once):
+            store.save(self.image, "click")
+        self.assertEqual(calls[:2], ["000001.png", "000001.png"])
+        self.assertTrue((store.directory / "captures/000001.png").is_file())
+        self.assertEqual(list(store.directory.rglob(".stepwatch-*")), [])
+
+        with patch("stepwatch.storage._REPLACE_ATTEMPTS", 3), \
+                patch("stepwatch.storage._REPLACE_DELAY", 0), \
+                patch("stepwatch.storage.os.replace", side_effect=PermissionError(13, "verrou")) as replace:
+            with self.assertRaisesRegex(StorageError, "non enregistrée"):
+                store.save(self.image, "click")
+        self.assertEqual(replace.call_count, 3)
+        self.assertEqual(len(store.steps), 1)
+        self.assertEqual(list(store.directory.rglob(".stepwatch-*")), [])
+
+    def test_report_failure_after_png_carries_the_saved_step(self):
+        store = SessionStore(self.root, "Rapport")
+        with patch("stepwatch.storage._atomic_text", side_effect=OSError("verrouillé")):
+            with self.assertRaises(ReportWriteError) as caught:
+                store.save(self.image, "click", annotation="Étape")
+        self.assertEqual(caught.exception.step["image"], "captures/000001.png")
+        self.assertEqual(caught.exception.step["annotation"], "Étape")
+        self.assertNotIn("close()", str(caught.exception))
+
     def test_invalid_output_is_actionable(self):
         output = self.root / "file.txt"
         output.write_text("x")
@@ -103,6 +153,130 @@ class StorageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fuseau"):
             store.save(self.image, "click", timestamp=datetime(2026, 1, 1))
         self.assertEqual(store.steps, [])
+
+
+class StandaloneReportTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.store = SessionStore(self.root, '<Poste "client">')
+        self.store.save(Image.new("RGB", (8, 6), "red"), "initial", annotation="<b>Début</b>")
+        self.store.save(Image.new("RGB", (8, 6), "blue"), "local_click", (2, 3),
+                        "Double-clic gauche local.", click_count=2)
+        self.store.close()
+
+    def test_single_file_embeds_each_png_byte_for_byte(self):
+        path = export_standalone(self.store.directory)
+        self.assertEqual(path.name, "rapport-autonome.html")
+        report = path.read_text(encoding="utf-8")
+        sources = re.findall(r'src="data:image/png;base64,([^"]+)"', report)
+        self.assertEqual(len(sources), 2)
+        for step, source in zip(self.store.steps, sources):
+            self.assertEqual(base64.b64decode(source),
+                             (self.store.directory / step["image"]).read_bytes())
+        self.assertNotIn('src="captures/', report)
+        self.assertNotIn("<a href", report)
+        self.assertIn("&lt;b&gt;Début&lt;/b&gt;", report)
+        self.assertIn("&lt;Poste &quot;client&quot;&gt;", report)
+        self.assertIn("Étape 2 — Double-clic local", report)
+        self.assertIn("img-src 'self' data:", report)
+        self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
+
+    def test_only_pngs_inside_captures_are_embedded(self):
+        Image.new("RGB", (2, 2)).save(self.root / "secret.png")
+        steps_file = self.store.directory / "steps.json"
+        metadata = json.loads(steps_file.read_text(encoding="utf-8"))
+        for image in ("../secret.png", "captures/../steps.json", str(self.root / "secret.png")):
+            metadata["steps"][0]["image"] = image
+            steps_file.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.subTest(image=image), \
+                    self.assertRaisesRegex(StorageError, "hors du dossier captures"):
+                export_standalone(self.store.directory)
+        self.assertFalse((self.store.directory / "rapport-autonome.html").exists())
+        self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
+
+    @unittest.skipIf(os.name == "nt", "Les liens symboliques exigent un privilège sous Windows.")
+    def test_symbolic_link_out_of_the_session_is_refused(self):
+        outside = self.root / "outside.png"
+        Image.new("RGB", (2, 2)).save(outside)
+        capture = self.store.directory / "captures" / "000001.png"
+        capture.unlink()
+        capture.symlink_to(outside)
+        with self.assertRaisesRegex(StorageError, "hors du dossier captures"):
+            export_standalone(self.store.directory)
+
+    def test_absolute_inside_capture_and_noncanonical_paths_are_refused(self):
+        steps_file = self.store.directory / "steps.json"
+        metadata = json.loads(steps_file.read_text(encoding="utf-8"))
+        paths = (
+            str(self.store.directory / "captures" / "000001.png"),
+            "captures/./000001.png", "captures/../captures/000001.png",
+            "captures//000001.png", "./captures/000001.png",
+            r"captures\000001.png", "captures/000001.png:secret.png",
+            "captures/000001\x00.png",
+        )
+        for image in paths:
+            metadata["steps"][0]["image"] = image
+            steps_file.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.subTest(image=image), self.assertRaisesRegex(StorageError, "hors du dossier captures"):
+                export_standalone(self.store.directory)
+        self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
+
+    @unittest.skipIf(os.name == "nt", "Les liens symboliques exigent un privilège sous Windows.")
+    def test_capture_directory_symlink_outside_the_session_is_refused(self):
+        captures = self.store.directory / "captures"
+        outside = self.root / "outside-captures"
+        captures.rename(outside)
+        captures.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(StorageError, "hors du dossier captures"):
+            export_standalone(self.store.directory)
+        self.assertFalse((self.store.directory / "rapport-autonome.html").exists())
+        self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
+
+    @unittest.skipIf(os.name == "nt", "Les liens symboliques exigent un privilège sous Windows.")
+    def test_capture_symlink_to_another_capture_is_refused(self):
+        captures = self.store.directory / "captures"
+        first = captures / "000001.png"
+        first.unlink()
+        first.symlink_to(captures / "000002.png")
+        with self.assertRaisesRegex(StorageError, "hors du dossier captures"):
+            export_standalone(self.store.directory)
+
+    def test_failed_export_preserves_the_previous_standalone_report(self):
+        previous = export_standalone(self.store.directory)
+        original = previous.read_bytes()
+        steps_file = self.store.directory / "steps.json"
+        metadata = json.loads(steps_file.read_text(encoding="utf-8"))
+        metadata["steps"][0]["image"] = "../secret.png"
+        steps_file.write_text(json.dumps(metadata), encoding="utf-8")
+        with self.assertRaises(StorageError):
+            export_standalone(self.store.directory)
+        self.assertEqual(previous.read_bytes(), original)
+        self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
+
+    def test_missing_or_corrupt_capture_names_the_step(self):
+        capture = self.store.directory / "captures" / "000002.png"
+        capture.write_bytes(b"pas une image")
+        with self.assertRaisesRegex(StorageError, "Étape 2 : 000002.png n'est pas une image PNG"):
+            export_standalone(self.store.directory)
+        capture.unlink()
+        with self.assertRaisesRegex(StorageError, "Étape 2 : capture illisible"):
+            export_standalone(self.store.directory)
+        (self.store.directory / "steps.json").write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(StorageError, "steps.json impossible"):
+            export_standalone(self.store.directory)
+
+    def test_reports_show_local_time_and_json_keeps_utc(self):
+        winter_paris = timezone(timedelta(hours=1))
+        self.assertEqual(_local_time("2026-11-07T18:11:14.694+00:00", winter_paris),
+                         "07/11/2026 19:11:14 (UTC+01:00)")
+        self.assertEqual(_local_time("pas une date"), "pas une date")
+        report = (self.store.directory / "rapport.html").read_text(encoding="utf-8")
+        self.assertIn(f'datetime="{self.store.steps[0]["timestamp"]}"', report)
+        self.assertRegex(report, r"\d\d/\d\d/\d{4} \d\d:\d\d:\d\d \(UTC[+-]\d\d:\d\d\)")
+        data = json.loads((self.store.directory / "steps.json").read_text(encoding="utf-8"))
+        self.assertTrue(data["steps"][0]["timestamp"].endswith("+00:00"))
 
 
 class ShareXImportTests(unittest.TestCase):
@@ -158,6 +332,17 @@ class ShareXImportTests(unittest.TestCase):
         self.assertEqual(len(directories), 1)
         self.assertTrue((directories[0] / "captures/000001.png").exists())
         self.assertTrue(invalid.exists())
+
+    def test_oversized_image_reports_source_and_partial_output(self):
+        self.make_image("valid.png", 1000, "white")
+        huge = self.source / "huge.png"
+        Image.new("RGB", (40, 40), "white").save(huge)
+        os.utime(huge, (2000, 2000))
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 400):
+            with self.assertRaisesRegex(StorageError, "huge.png.*conservées"):
+                import_sharex(self.source, self.output)
+        (directory,) = list(self.output.iterdir())
+        self.assertTrue((directory / "captures/000001.png").exists())
 
     def test_missing_or_empty_source_is_explicit(self):
         with self.assertRaisesRegex(ValueError, "n'existe pas"):

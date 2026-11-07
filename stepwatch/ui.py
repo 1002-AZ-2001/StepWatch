@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import queue
@@ -16,7 +17,9 @@ from PIL import Image, ImageTk
 from .engine import Recorder
 from .models import CaptureConfig, CaptureTarget, Rect
 from .platform import WindowsBackend
-from .storage import SessionStore, import_sharex
+from .storage import SessionStore, export_standalone, import_sharex
+
+LOGGER = logging.getLogger(__name__)
 
 
 class StepWatchApp:
@@ -37,21 +40,29 @@ class StepWatchApp:
         "error": "Erreur · consulter le journal",
     }
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, log_path: Path | None = None) -> None:
         self.root = root
+        # Sans console (exécutable --windowed), Tk écrirait ces erreurs sur
+        # un sys.stderr absent : elles seraient perdues.
+        self.root.report_callback_exception = self._report_callback_exception
         self.root.title("StepWatch — Documentation d’intervention")
-        self.root.geometry("1190x820")
-        self.root.minsize(1020, 760)
+        # Tk met les polices (en points) à l’échelle du DPI, pas les tailles en
+        # pixels : sans ce facteur, à 150 % les réglages sont tronqués.
+        self._scale = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        self._fit_to_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self._backend = WindowsBackend()
         self._recorder: Recorder | None = None
         self._targets: list[CaptureTarget] = []
         self._last_image: Image.Image | None = None
         self._photo: ImageTk.PhotoImage | None = None
+        self._preview_key: tuple[Image.Image, int, int] | None = None
         self._session_dir: Path | None = None
         self._import_thread: threading.Thread | None = None
+        self._export_thread: threading.Thread | None = None
         self._background_events: queue.Queue = queue.Queue()
         self._closing = False
+        self._close_error: str | None = None
         self._poll_id: str | None = None
         self._settings_widgets: list[tuple[tk.Widget, str]] = []
 
@@ -72,8 +83,30 @@ class StepWatchApp:
 
         self._style()
         self._build()
+        if log_path is not None:
+            self._write_log(f"Journal de diagnostic : {log_path}", level=None)
         self._refresh_targets()
         self._poll()
+
+    def _px(self, value: int) -> int:
+        return int(round(value * self._scale))
+
+    def _fit_to_screen(self) -> None:
+        """Taille par défaut mise à l’échelle, bornée par l’écran principal.
+
+        1190 × 820 dépassait un écran 1366 × 768, courant sur les portables
+        d’intervention : le bas de la fenêtre (journal) était hors écran.
+        """
+        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        # Réserve la barre des tâches et la barre de titre.
+        available_width = max(screen_width - self._px(40), 320)
+        available_height = max(screen_height - self._px(110), 240)
+        width = min(self._px(1190), available_width)
+        height = min(self._px(820), available_height)
+        self.root.minsize(min(self._px(1020), available_width), min(self._px(760), available_height))
+        x = max(0, (screen_width - width) // 2)
+        y = max(0, (available_height - height) // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
 
     def _style(self) -> None:
         families = {family.casefold() for family in tkfont.families(self.root)}
@@ -128,7 +161,7 @@ class StepWatchApp:
 
         body = ttk.Frame(outer)
         body.grid(row=2, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=0, minsize=420)
+        body.columnconfigure(0, weight=0, minsize=self._px(420))
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
 
@@ -136,7 +169,7 @@ class StepWatchApp:
         settings.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
         settings.rowconfigure(0, weight=1)
         settings.columnconfigure(0, weight=1)
-        settings_canvas = tk.Canvas(settings, bg="#eef2f7", highlightthickness=0, width=420)
+        settings_canvas = tk.Canvas(settings, bg="#eef2f7", highlightthickness=0, width=self._px(420))
         settings_canvas.grid(row=0, column=0, sticky="nsew")
         settings_scrollbar = ttk.Scrollbar(settings, orient="vertical", command=settings_canvas.yview)
         settings_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -173,7 +206,7 @@ class StepWatchApp:
             self.region_frame.columnconfigure(index, weight=1)
             ttk.Label(self.region_frame, text=label).grid(row=0, column=index, sticky="w")
             self._setting(ttk.Entry(self.region_frame, textvariable=self.region_values[index], width=8)).grid(row=1, column=index, sticky="ew", padx=(0, 5 if index < 3 else 0))
-        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="Muted.TLabel", wraplength=380).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
 
         capture = ttk.LabelFrame(left, text="Déclenchement")
         capture.grid(row=2, column=0, sticky="ew", pady=(0, 10))
@@ -184,7 +217,7 @@ class StepWatchApp:
             self._setting(ttk.Entry(capture, textvariable=variable, width=9)).grid(row=2, column=col, sticky="ew", padx=(0, 8 if col < 2 else 0))
             capture.columnconfigure(col, weight=1)
         self._setting(ttk.Checkbutton(capture, text="Mode conservateur · détecter les petits changements", variable=self.conservative)).grid(row=3, column=0, columnspan=3, sticky="w", pady=(9, 0))
-        ttk.Label(capture, text="Un seuil plus bas conserve davantage de changements visuels.", style="Muted.TLabel", wraplength=380).grid(row=4, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        ttk.Label(capture, text="Un seuil plus bas conserve davantage de changements visuels.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=4, column=0, columnspan=3, sticky="w", pady=(5, 0))
 
         masks = ttk.LabelFrame(left, text="Masquage des informations sensibles")
         masks.grid(row=3, column=0, sticky="ew")
@@ -222,16 +255,20 @@ class StepWatchApp:
         preview.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(0, weight=1)
-        self.preview = tk.Label(preview, text="L’aperçu apparaîtra après la première capture.", bg="#142238", fg="#d7e2ef", font=(self._ui_font, 10), anchor="center")
+        # width/height 1 : la taille demandée ne dépend pas de l’image affichée,
+        # sinon chaque nouvelle miniature relance <Configure> et un redessin.
+        self.preview = tk.Label(preview, text="L’aperçu apparaîtra après la première capture.", bg="#142238", fg="#d7e2ef", font=(self._ui_font, 10), anchor="center", width=1, height=1)
         self.preview.grid(row=0, column=0, sticky="nsew")
         self.preview.bind("<Configure>", self._draw_preview)
 
         session = ttk.Frame(right)
         session.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         session.columnconfigure(0, weight=1)
-        ttk.Label(session, textvariable=self.session_text, style="Muted.TLabel", wraplength=430).grid(row=0, column=0, sticky="w")
+        ttk.Label(session, textvariable=self.session_text, style="Muted.TLabel", wraplength=self._px(430)).grid(row=0, column=0, sticky="w")
         self.open_button = ttk.Button(session, text="Ouvrir le dossier", command=self._open_session, state="disabled")
         self.open_button.grid(row=0, column=1, padx=(6, 0))
+        self.export_button = ttk.Button(session, text="Rapport autonome", command=self._export_standalone, state="disabled")
+        self.export_button.grid(row=0, column=2, padx=(6, 0))
 
         log_frame = ttk.LabelFrame(right, text="Journal")
         log_frame.grid(row=4, column=0, sticky="nsew")
@@ -244,8 +281,12 @@ class StepWatchApp:
             footer = "Capture native disponible sous Windows. L’import ShareX et les rapports restent utilisables ici."
         ttk.Label(outer, text=footer, style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=(12, 0))
 
-    def _write_log(self, message: str) -> None:
+    def _write_log(self, message: str, level: int | None = logging.INFO) -> None:
+        """Ajoute une ligne au journal de l’interface et, si level, au journal de diagnostic."""
         from datetime import datetime
+
+        if level is not None:
+            LOGGER.log(level, message)
 
         self.log.configure(state="normal")
         self.log.insert("end", f"{datetime.now():%H:%M:%S}  {message}\n")
@@ -284,12 +325,34 @@ class StepWatchApp:
             self.output.set(selected)
 
     @staticmethod
-    def _number(value: str) -> float:
-        return float(value.strip().replace(",", "."))
+    def _number(value: str, label: str) -> float:
+        try:
+            return float(value.strip().replace(",", "."))
+        except ValueError:
+            raise ValueError(f"{label} : nombre attendu, par exemple 1,5.") from None
+
+    @staticmethod
+    def _integer(value: str, label: str) -> int:
+        try:
+            return int(value.strip())
+        except ValueError:
+            raise ValueError(f"{label} : nombre entier de pixels attendu.") from None
+
+    def _output_dir(self) -> Path:
+        text = self.output.get().strip()
+        if not text:
+            raise ValueError("Choisissez un dossier pour les rapports.")
+        directory = Path(text).expanduser()
+        if not directory.is_absolute():
+            # Relatif au dossier courant, qui dépend du raccourci de lancement.
+            raise ValueError("Indiquez un chemin complet pour le dossier des rapports.")
+        return directory
 
     def _read_config(self) -> tuple[CaptureTarget, CaptureConfig]:
         if self.source.get() == "Zone personnalisée":
-            rect = Rect(*(int(variable.get().strip()) for variable in self.region_values))
+            names = ("X de la zone", "Y de la zone", "Largeur de la zone", "Hauteur de la zone")
+            rect = Rect(*(self._integer(variable.get(), name)
+                          for variable, name in zip(self.region_values, names)))
             target = CaptureTarget(kind="region", label="Zone personnalisée", rect=rect)
         else:
             index = self.target_combo.current()
@@ -303,15 +366,19 @@ class StepWatchApp:
             fields = line.replace(";", ",").split(",")
             if len(fields) != 4:
                 raise ValueError(f"Masque ligne {line_number} : indiquez x, y, largeur, hauteur.")
-            mask = Rect(*(int(field.strip()) for field in fields))
+            values = [self._integer(field, f"Masque ligne {line_number}") for field in fields]
+            try:
+                mask = Rect(*values)
+            except ValueError as exc:
+                raise ValueError(f"Masque ligne {line_number} : {exc}") from None
             if mask.left < 0 or mask.top < 0:
                 raise ValueError(f"Masque ligne {line_number} : X et Y doivent être positifs ou nuls.")
             masks.append(mask)
         config = CaptureConfig(
             mode=self.MODES[self.mode.get()],
-            interval=self._number(self.interval.get()),
-            click_delay=self._number(self.delay.get()),
-            sensitivity=self._number(self.sensitivity.get()),
+            interval=self._number(self.interval.get(), "Intervalle de comparaison"),
+            click_delay=self._number(self.delay.get(), "Délai après clic"),
+            sensitivity=self._number(self.sensitivity.get(), "Seuil de changement"),
             conservative=self.conservative.get(),
             masks=tuple(masks),
         )
@@ -321,8 +388,12 @@ class StepWatchApp:
         return self._recorder is not None and self._recorder.state in {"recording", "paused", "stopping"}
 
     def _start(self) -> None:
-        if self._active() or self._closing:
+        if self._active() or self._closing or self._background_running():
             return
+        if self._recorder is not None:
+            # Derniers événements de la session précédente (erreur de rapport
+            # à l’arrêt, par exemple) : les afficher avant de la remplacer.
+            self._drain(self._recorder.events, None, self._handle_event)
         store = None
         recorder = None
         try:
@@ -330,12 +401,11 @@ class StepWatchApp:
                 raise RuntimeError("L’enregistrement natif nécessite Windows. Vous pouvez importer un dossier ShareX sur ce système.")
             if not self.name.get().strip():
                 raise ValueError("Indiquez un nom d’intervention.")
-            if not self.output.get().strip():
-                raise ValueError("Choisissez un dossier pour les rapports.")
+            output = self._output_dir()
             target, config = self._read_config()
             # Validation préalable : ne crée pas de dossier pour une cible déjà fermée.
             self._backend.resolve(target)
-            store = SessionStore(Path(self.output.get()).expanduser(), self.name.get().strip())
+            store = SessionStore(output, self.name.get().strip())
             recorder = Recorder(target, config, store)
             self._recorder = recorder
             self._session_dir = store.directory
@@ -380,15 +450,21 @@ class StepWatchApp:
             self._recorder.stop(timeout=0)
         self._update_controls()
 
+    def _background_running(self) -> bool:
+        return any(thread is not None and thread.is_alive()
+                   for thread in (self._import_thread, self._export_thread))
+
     def _update_controls(self) -> None:
         state = self._recorder.state if self._recorder is not None else "idle"
         active = self._active()
-        busy = self._closing or (self._import_thread is not None and self._import_thread.is_alive())
+        busy = self._closing or self._background_running()
         self.start_button.configure(state="disabled" if active or busy else "normal")
         self.pause_button.configure(state="normal" if state == "recording" and not self._closing else "disabled")
         self.resume_button.configure(state="normal" if state == "paused" and not self._closing else "disabled")
         self.stop_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
         self.import_button.configure(state="disabled" if active or busy else "normal")
+        exportable = self._session_dir is not None and not active and not busy
+        self.export_button.configure(state="normal" if exportable else "disabled")
         for widget, normal_state in self._settings_widgets:
             widget.configure(state="disabled" if active or busy else normal_state)
         if not active and not busy:
@@ -399,6 +475,8 @@ class StepWatchApp:
             self.state_text.set("Fermeture en cours · finalisation des fichiers…")
         elif self._import_thread is not None and self._import_thread.is_alive():
             self.state_text.set("Import ShareX en cours…")
+        elif self._export_thread is not None and self._export_thread.is_alive():
+            self.state_text.set("Export du rapport autonome en cours…")
         else:
             self.state_text.set(self.STATE_NAMES.get(state, state))
 
@@ -406,9 +484,13 @@ class StepWatchApp:
         if self._last_image is None:
             return
         width, height = max(self.preview.winfo_width() - 12, 1), max(self.preview.winfo_height() - 12, 1)
+        previous = self._preview_key
+        if previous is not None and previous[0] is self._last_image and previous[1:] == (width, height):
+            return  # Même image, même taille : rien à recalculer.
         preview = self._last_image.copy()
         preview.thumbnail((width, height), Image.Resampling.LANCZOS)
         self._photo = ImageTk.PhotoImage(preview, master=self.root)
+        self._preview_key = (self._last_image, width, height)
         self.preview.configure(image=self._photo, text="")
 
     def _handle_event(self, event: dict) -> None:
@@ -421,44 +503,81 @@ class StepWatchApp:
             self._draw_preview()
         message = event.get("message", "")
         if message:
-            self._write_log(str(message))
+            # Les comparaisons ignorées (une par intervalle) restent hors du fichier.
+            level = {"error": logging.WARNING, "ignored": logging.DEBUG}.get(event.get("type"), logging.INFO)
+            self._write_log(str(message), level=level)
+
+    def _handle_background_event(self, event: dict) -> None:
+        if event["type"] == "import_done":
+            self._session_dir = Path(event["directory"])
+            self.session_text.set(str(self._session_dir))
+            self.open_button.configure(state="normal")
+            self._write_log(f"Import terminé. Sources préservées. Rapport : {self._session_dir}")
+        elif event["type"] == "export_done":
+            size = event["size"] / 1_000_000
+            self._write_log(f"Rapport autonome : {event['path']} ({size:.1f} Mo). Il contient "
+                            "toutes les captures : protégez-le comme le dossier de l’intervention.")
+        elif event["type"] == "error":
+            self._write_log(event["message"], level=logging.WARNING)
+            if not self._closing:
+                messagebox.showerror(event.get("title", "Import impossible"), event["message"], parent=self.root)
+
+    def _drain(self, events: queue.Queue, limit: int | None, handler) -> None:
+        """Traite au plus ``limit`` événements ; un événement fautif est journalisé."""
+        count = 0
+        while limit is None or count < limit:
+            try:
+                event = events.get_nowait()
+            except queue.Empty:
+                return
+            count += 1
+            try:
+                handler(event)
+            except Exception as exc:
+                self._report_ui_error(exc)
+
+    def _report_ui_error(self, exc: BaseException) -> None:
+        LOGGER.error("Erreur d’affichage ignorée", exc_info=exc)
+        try:
+            self._write_log(f"Erreur d’affichage ignorée : {exc}", level=None)
+        except Exception:
+            pass
+
+    def _report_callback_exception(self, kind, value, traceback) -> None:
+        LOGGER.error("Erreur dans un rappel de l’interface", exc_info=(kind, value, traceback))
+        try:
+            self._write_log(f"Erreur interne : {value}. Détails dans le journal de diagnostic.", level=None)
+        except Exception:
+            pass
 
     def _poll(self) -> None:
-        # Ne pas monopoliser Tk si beaucoup d’événements arrivent simultanément.
-        if self._recorder is not None:
-            for _ in range(100):
-                try:
-                    event = self._recorder.events.get_nowait()
-                except queue.Empty:
-                    break
-                self._handle_event(event)
-        for _ in range(30):
-            try:
-                event = self._background_events.get_nowait()
-            except queue.Empty:
-                break
-            if event["type"] == "import_done":
-                self._session_dir = Path(event["directory"])
-                self.session_text.set(str(self._session_dir))
-                self.open_button.configure(state="normal")
-                self._write_log(f"Import terminé. Sources préservées. Rapport : {self._session_dir}")
-            elif event["type"] == "error":
-                self._write_log(event["message"])
-                if not self._closing:
-                    messagebox.showerror("Import impossible", event["message"], parent=self.root)
-        self._update_controls()
-        self._poll_id = self.root.after(100, self._poll)
+        try:
+            # Une seule boucle de suivi, même si _poll est appelé directement.
+            if self._poll_id is not None:
+                self.root.after_cancel(self._poll_id)
+            # Ne pas monopoliser Tk si beaucoup d’événements arrivent ensemble.
+            if self._recorder is not None:
+                self._drain(self._recorder.events, 100, self._handle_event)
+            self._drain(self._background_events, 30, self._handle_background_event)
+            self._update_controls()
+        except Exception as exc:
+            self._report_ui_error(exc)
+        finally:
+            # Toujours reprogrammer : sinon l’interface se fige et la file du
+            # moteur grossit sans fin avec les aperçus des captures.
+            self._poll_id = self.root.after(100, self._poll)
 
     def _import(self) -> None:
-        if self._active() or self._closing or (self._import_thread and self._import_thread.is_alive()):
+        if self._active() or self._closing or self._background_running():
             return
         source = filedialog.askdirectory(parent=self.root, title="Dossier contenant les captures ShareX")
         if not source:
             return
-        if not self.output.get().strip():
-            messagebox.showerror("Dossier requis", "Choisissez un dossier pour les rapports.", parent=self.root)
+        try:
+            output = self._output_dir()
+        except ValueError as exc:
+            messagebox.showerror("Dossier requis", str(exc), parent=self.root)
             return
-        output = Path(self.output.get()).expanduser()
         name = self.name.get().strip() or "Import ShareX"
 
         def work() -> None:
@@ -471,6 +590,33 @@ class StepWatchApp:
         self._import_thread = threading.Thread(target=work, name="stepwatch-import", daemon=False)
         self._import_thread.start()
         self._write_log("Import ShareX : copie et classement des images, sans modification des sources.")
+        self._update_controls()
+
+    def _export_standalone(self) -> None:
+        if self._session_dir is None or self._active() or self._closing or self._background_running():
+            return
+        directory = self._session_dir
+        recorder = self._recorder
+        # A final report flush may have failed after PNGs were safely written.
+        # Retry the matching session's in-memory steps before reading steps.json,
+        # rather than exporting an apparently complete but stale report.
+        store = (recorder.store if recorder is not None
+                 and recorder.store.directory == directory else None)
+
+        def work() -> None:
+            try:
+                if store is not None:
+                    store.close()
+                path = export_standalone(directory)
+                self._background_events.put({"type": "export_done", "path": str(path),
+                                             "size": path.stat().st_size})
+            except Exception as exc:
+                self._background_events.put({"type": "error", "title": "Export impossible",
+                                             "message": f"Export du rapport autonome interrompu : {exc}"})
+
+        self._export_thread = threading.Thread(target=work, name="stepwatch-export", daemon=False)
+        self._export_thread.start()
+        self._write_log("Export du rapport autonome : intégration des captures dans un seul fichier HTML…")
         self._update_controls()
 
     def _open_session(self) -> None:
@@ -486,31 +632,82 @@ class StepWatchApp:
         except OSError as exc:
             self._write_log(f"Ouverture du dossier impossible : {exc}")
 
+    def shutdown(self, timeout: float = 5) -> bool:
+        """Arrête l’enregistrement si la boucle Tk se termine sans _close()."""
+        if self._recorder is not None:
+            try:
+                stopped = self._recorder.stop(timeout=timeout)
+            except Exception as exc:
+                LOGGER.exception("Arrêt de l’enregistrement impossible à la fermeture")
+                try:
+                    self._write_log(f"Arrêt incomplet : {exc}. Le processus peut rester actif.", level=None)
+                except Exception:
+                    pass  # La fenêtre peut déjà avoir été détruite.
+                return False
+            if not stopped:
+                message = (f"Arrêt incomplet après {timeout:g} s : le thread de capture est encore actif. "
+                           "Le processus peut rester ouvert ; aucune fermeture forcée n’est effectuée.")
+                LOGGER.warning(message)
+                try:
+                    self._write_log(message, level=None)
+                except Exception:
+                    pass
+                return False
+        return True
+
     def _close(self) -> None:
         if self._closing:
             return
         if self._active() and not messagebox.askyesno("Fermer StepWatch", "Arrêter l’intervention et finaliser le rapport avant de fermer ?", parent=self.root):
             return
         self._closing = True
-        self._stop()
         self._finish_close()
 
     def _finish_close(self) -> None:
-        recorder_done = self._recorder is None or self._recorder.stop(timeout=0)
-        importer_done = self._import_thread is None or not self._import_thread.is_alive()
-        if not recorder_done or not importer_done:
-            self.root.after(100, self._finish_close)
-            return
+        retry = True
         try:
-            self._backend.close()
+            recorder_done = self._recorder is None or self._recorder.stop(timeout=0)
+            self._update_controls()
+            background_done = not self._background_running()
+            if not recorder_done or not background_done:
+                return
+            try:
+                self._backend.close()
+            except Exception as exc:
+                LOGGER.exception("Fermeture des ressources de sélection impossible")
+                self._write_log(f"Fermeture des ressources de sélection : {exc}", level=None)
+            if self._poll_id is not None:
+                self.root.after_cancel(self._poll_id)
+            self.root.destroy()
+            retry = False
         except Exception as exc:
-            self._write_log(f"Fermeture des ressources de sélection : {exc}")
-        if self._poll_id is not None:
-            self.root.after_cancel(self._poll_id)
-        self.root.destroy()
+            # A transient stop/report/display error must not strand the closing
+            # latch with every control disabled and no future close attempt.
+            message = str(exc)
+            if message != self._close_error:
+                self._close_error = message
+                LOGGER.exception("Fermeture incomplète ; nouvelle tentative")
+                try:
+                    self._write_log(f"Fermeture incomplète : {exc}. Nouvelle tentative…", level=None)
+                except Exception:
+                    pass
+        finally:
+            if retry:
+                try:
+                    self.root.after(100, self._finish_close)
+                except tk.TclError:
+                    # The main loop has gone away; run_app's finally still
+                    # requests recorder shutdown and reports a timeout.
+                    LOGGER.warning("La fenêtre a disparu avant la fin de la fermeture.")
 
 
-def run_app() -> None:
+def run_app(log_path: Path | None = None) -> None:
     root = tk.Tk()
-    StepWatchApp(root)
-    root.mainloop()
+    app = StepWatchApp(root, log_path)
+    try:
+        root.mainloop()
+    finally:
+        # Ctrl+C dans la console ou exception sortie de la boucle Tk : sans
+        # cet arrêt, le thread de capture (non démon) continuait d’enregistrer
+        # sans interface et empêchait le processus de se terminer.
+        app.shutdown()

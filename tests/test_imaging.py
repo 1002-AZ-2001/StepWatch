@@ -1,9 +1,12 @@
+import math
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
-from stepwatch.imaging import apply_masks, changed_percent, mark_click
+from stepwatch.imaging import (ANALYSIS_MAX_PIXELS, analysis_factor, apply_masks,
+                               changed_percent, mark_click)
 
 
 class ImagingTests(unittest.TestCase):
@@ -46,6 +49,40 @@ class ImagingTests(unittest.TestCase):
         self.assertEqual(changed_percent(before, after), 0)
         ImageDraw.Draw(after).polygon(((50, 50), (50, 65), (60, 60)), fill="black")
         self.assertLess(changed_percent(before, after), 0.2)
+
+    def test_large_targets_are_analysed_on_a_bounded_number_of_pixels(self):
+        self.assertEqual(analysis_factor((400, 300)), 1)
+        for size in ((1366, 768), (1920, 1080), (2560, 1440), (3840, 2160)):
+            factor = analysis_factor(size)
+            analysed = math.ceil(size[0] / factor) * math.ceil(size[1] / factor)
+            with self.subTest(size=size):
+                self.assertGreater(factor, 1)
+                self.assertLessEqual(analysed, ANALYSIS_MAX_PIXELS)
+        filtered_sizes = []
+        original_filter = Image.Image.filter
+
+        def spy(image, *args, **kwargs):
+            filtered_sizes.append(image.size)
+            return original_filter(image, *args, **kwargs)
+
+        frame = Image.new("RGB", (1920, 1080), "white")
+        with patch.object(Image.Image, "filter", spy):
+            changed_percent(frame, frame.copy())
+        self.assertTrue(filtered_sizes)
+        self.assertTrue(all(w * h <= ANALYSIS_MAX_PIXELS for w, h in filtered_sizes))
+
+    def test_large_target_keeps_area_semantics_and_ignores_caret_noise(self):
+        before = Image.new("RGB", (1920, 1080), "white")
+        dialog = before.copy()
+        ImageDraw.Draw(dialog).rectangle((600, 300, 1199, 699), fill=(40, 40, 40))
+        self.assertAlmostEqual(changed_percent(before, dialog),
+                               100 * 600 * 400 / (1920 * 1080), delta=0.5)
+        caret = before.copy()
+        ImageDraw.Draw(caret).rectangle((900, 500, 901, 517), fill="black")
+        caret.putpixel((10, 10), (0, 0, 0))
+        self.assertLess(changed_percent(before, caret), 0.05)
+        # Conservative mode stays at full resolution for small changes.
+        self.assertGreater(changed_percent(before, caret, conservative=True), 0)
 
     def test_mask_clips_to_image_and_leaves_source_unchanged(self):
         image = Image.new("RGB", (10, 10), "white")

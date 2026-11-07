@@ -69,7 +69,8 @@ class CaptureTarget:
     def __post_init__(self) -> None:
         if self.kind not in {"window", "monitor", "region"}:
             raise ValueError("Type de cible inconnu.")
-        if self.kind == "window" and (not isinstance(self.hwnd, int) or self.hwnd <= 0):
+        if self.kind == "window" and (isinstance(self.hwnd, bool) or not isinstance(self.hwnd, int)
+                                      or self.hwnd <= 0):
             raise ValueError("Une fenêtre doit posséder un identifiant Windows valide.")
         if self.kind != "window" and not isinstance(self.rect, Rect):
             raise ValueError("Un moniteur ou une zone doit posséder un rectangle valide.")
@@ -97,6 +98,12 @@ class CaptureConfig:
                 raise ValueError(f"{name} doit être compris entre {minimum} et {maximum}.")
         if not isinstance(self.conservative, bool):
             raise ValueError("Le mode conservateur doit être booléen.")
-        if any(not isinstance(mask, Rect) for mask in self.masks):
+        # Materialise first: validating a generator would consume it and
+        # silently store no mask at all, leaving sensitive areas visible.
+        try:
+            masks = tuple(self.masks)
+        except TypeError as exc:
+            raise ValueError("Les masques doivent être des rectangles.") from exc
+        if any(not isinstance(mask, Rect) for mask in masks):
             raise ValueError("Les masques doivent être des rectangles.")
-        object.__setattr__(self, "masks", tuple(self.masks))
+        object.__setattr__(self, "masks", masks)

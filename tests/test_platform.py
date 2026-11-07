@@ -4,7 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 from stepwatch.models import CaptureConfig, CaptureTarget, Rect
-from stepwatch.platform import CaptureUnavailable, WindowsBackend, enable_dpi_awareness
+from stepwatch.platform import (CaptureUnavailable, WindowsBackend, double_click_settings,
+                                enable_dpi_awareness)
 
 
 class FakeMSS:
@@ -17,7 +18,8 @@ class FakeMSS:
 
     def grab(self, rectangle):
         self.requests.append(rectangle)
-        return SimpleNamespace(size=(2, 1), rgb=b"\xff\x00\x00\x00\xff\x00")
+        # Real MSS screenshots expose native BGRA pixels (red, then green).
+        return SimpleNamespace(size=(2, 1), bgra=b"\x00\x00\xff\xff\x00\xff\x00\xff")
 
     def close(self):
         self.closed = True
@@ -38,6 +40,7 @@ class FakeWindows:
     def is_visible(self, hwnd): return self.visible
     def window_rect(self, hwnd): return self.rectangle
     def window_at(self, x, y): return self.hit
+    def owner(self, hwnd): return getattr(self, "owners", {}).get(hwnd, 0)
 
 
 class GeometryTests(unittest.TestCase):
@@ -59,6 +62,18 @@ class GeometryTests(unittest.TestCase):
                        {"mode": "keyboard"}, {"masks": ["invalid"]}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 CaptureConfig(**kwargs)
+
+
+    def test_masks_from_any_iterable_are_kept_and_hwnd_must_be_a_handle(self):
+        mask = Rect(0, 0, 10, 10)
+        self.assertEqual(CaptureConfig(masks=(mask for _ in range(2))).masks, (mask, mask))
+        self.assertEqual(CaptureConfig(masks=[mask]).masks, (mask,))
+        for masks in (iter([mask, "x"]), 5):
+            with self.subTest(masks=masks), self.assertRaises(ValueError):
+                CaptureConfig(masks=masks)
+        for hwnd in (True, 0, -5, "123", None):
+            with self.subTest(hwnd=hwnd), self.assertRaises(ValueError):
+                CaptureTarget("window", "Fenêtre", hwnd=hwnd)
 
 
 class BackendTests(unittest.TestCase):
@@ -104,9 +119,32 @@ class BackendTests(unittest.TestCase):
         self.assertFalse(self.backend.belongs_to_target(self.target, -190, 20))
         self.assertFalse(self.backend.belongs_to_target(self.target, 0, 0))
 
+    def test_locate_click_is_target_relative_and_never_opens_mss(self):
+        self.assertEqual(self.backend.locate_click(self.target, -190, 20), (10, 10))
+        self.native.hit = 456
+        self.assertIsNone(self.backend.locate_click(self.target, -190, 20))
+        self.assertIsNone(self.backend.locate_click(self.target, 0, 0))
+        region = CaptureTarget("region", "Zone", rect=Rect(-50, -50, 10, 10))
+        self.assertEqual(self.backend.locate_click(region, -45, -41), (5, 9))
+        self.assertIsNone(self.backend._capture)
+
+    def test_clicks_on_dialogs_owned_by_the_target_are_kept(self):
+        self.native.owners = {789: 123, 790: 789}  # Dialog, then its message box.
+        for hwnd in (789, 790):
+            self.native.hit = hwnd
+            with self.subTest(hwnd=hwnd):
+                self.assertEqual(self.backend.locate_click(self.target, -190, 20), (10, 10))
+        self.native.hit = 456  # Unrelated window covering the target.
+        self.assertIsNone(self.backend.locate_click(self.target, -190, 20))
+        self.native.owners = {1: 2, 2: 1}  # A corrupt owner cycle terminates.
+        self.native.hit = 1
+        self.assertIsNone(self.backend.locate_click(self.target, -190, 20))
+
     def test_rgb_capture_and_cleanup(self):
         image = self.backend.grab(Rect(0, 0, 2, 1))
+        self.assertEqual(image.mode, "RGB")
         self.assertEqual(image.getpixel((0, 0)), (255, 0, 0))
+        self.assertEqual(image.getpixel((1, 0)), (0, 255, 0))
         self.assertEqual(self.screen.requests, [dict(left=0, top=0, width=2, height=1)])
         self.backend.close()
         self.backend.close()
@@ -155,6 +193,11 @@ class BackendTests(unittest.TestCase):
         worker.start()
         worker.join()
         self.assertEqual(len(errors), 1)
+
+    @unittest.skipIf(sys.platform == "win32", "Non-Windows behavior only")
+    def test_double_click_settings_fall_back_to_windows_defaults(self):
+        self.assertEqual(double_click_settings(), (0.5, 2, 2))
+        self.assertEqual(WindowsBackend().double_click_settings(), (0.5, 2, 2))
 
     @unittest.skipIf(sys.platform == "win32", "Non-Windows behavior only")
     def test_non_windows_import_has_explicit_window_limit(self):

@@ -2,7 +2,7 @@
 
 StepWatch documente une intervention informatique à partir des pixels visibles sur le poste Windows du technicien. Les captures et les rapports restent sur ce poste. Aucun agent n'est installé chez le client.
 
-**Le dépôt fourni était vide.** Cette version 0.1.0 est une première implémentation du cahier des charges, pas une correction vérifiée du logiciel historique 1.0.1 dont les sources n'étaient pas présentes.
+**Le dépôt fourni était vide.** La version 0.1.0 a fourni la première implémentation du cahier des charges ; elle ne constituait pas une correction vérifiée du logiciel historique 1.0.1, dont les sources n'étaient pas présentes. La version actuelle **0.2.0** ajoute les correctifs et améliorations issus de l'audit Claude fourni par l'utilisateur : capture et interface plus robustes, regroupement des doubles-clics, rapport autonome et diagnostic local.
 
 ## Installation et lancement sous Windows
 
@@ -18,6 +18,8 @@ L'installation crée `.venv`, installe les versions de `requirements.txt` et vé
 ```powershell
 .\scripts\install.ps1 -Python "C:\Python312\python.exe"
 ```
+
+Sans `-Python`, le script essaie le lanceur `py` dans l'ordre 3.12, 3.13 puis 3.11, et enfin la commande `python`. Il vérifie la version et l'import de Tcl/Tk avant de créer `.venv`. Un environnement existant non conforme est signalé, sans suppression automatique. Les autres versions peuvent être sélectionnées explicitement, mais la compatibilité complète des dépendances avec Python 3.14 ou ultérieur n'est pas établie. Les scripts PowerShell doivent encore être exécutés et validés sur Windows PowerShell 5.1 et PowerShell 7.
 
 Si la politique PowerShell bloque les scripts, utilisez les commandes Python ci-dessous ou une autorisation limitée au processus, selon la politique de votre organisation. Aucun script ne modifie la politique de sécurité de la machine.
 
@@ -36,6 +38,8 @@ py -3.12 -m venv .venv
 5. Définissez si nécessaire des masques sensibles, puis cliquez sur **Démarrer**. Rien n'est enregistré automatiquement au lancement de l'application.
 6. Utilisez **Pause**, **Reprendre** et **Arrêter**. L'aperçu, les compteurs et le journal montrent les captures conservées, les comparaisons ignorées et les erreurs.
 
+Un double-clic (ou un triple-clic) du même bouton, au même endroit et dans le délai de double-clic de Windows, donne une seule étape « Double-clic local », capturée après le dernier appui : les appuis suivants doivent survenir avant la capture du premier, c'est-à-dire pendant le délai après clic (0,35 s par défaut). `steps.json` indique le nombre d'appuis dans `click_count`.
+
 En mode **Clics uniquement**, la première capture attend un clic local : aucune image de référence n'est enregistrée au démarrage. Les modes hybride et visuel peuvent conserver une image initiale pour établir le début de l'intervention.
 
 Les masques sont des rectangles `x,y,largeur,hauteur`, un par ligne, relatifs au coin supérieur gauche de la capture. Ils sont appliqués avant comparaison et enregistrement. Ils restent fixes par rapport à la capture : vérifiez leur position si la disposition ou la taille de la fenêtre change. Ils ne détectent pas automatiquement les mots de passe. N'ouvrez pas de données sensibles hors des zones masquées pendant une session.
@@ -44,19 +48,33 @@ Pour AnyDesk, TeamViewer ou RDP, sélectionnez la fenêtre locale du logiciel de
 
 ## Captures et rapports
 
-Chaque intervention reçoit un dossier unique contenant les captures PNG dans `captures/`, les étapes dans `steps.json` et le rapport dans `rapport.html`. Ouvrez `rapport.html` avec un navigateur, sans serveur ni accès Internet. Conservez le dossier `captures/` à côté du HTML pour garder ses liens relatifs valides. Les horodatages sont enregistrés en UTC.
+Chaque intervention reçoit un dossier unique contenant les captures PNG dans `captures/`, les étapes dans `steps.json` et le rapport dans `rapport.html`. Ouvrez `rapport.html` avec un navigateur, sans serveur ni accès Internet. Conservez le dossier `captures/` à côté du HTML pour garder ses liens relatifs valides. `steps.json` enregistre les horodatages en UTC ; les rapports HTML les affichent en heure locale du poste, avec le décalage par rapport à UTC.
+
+**Rapport autonome** (à côté de **Ouvrir le dossier**) écrit `rapport-autonome.html` dans le dossier de l'intervention : un seul fichier, captures intégrées, à joindre à un ticket ou à transmettre sans le dossier `captures/`. Seules les images PNG du dossier `captures/` de la session sont intégrées. Ce fichier contient toutes les captures : protégez-le comme le dossier lui-même. Il est plus lourd que les PNG réunis (encodage base64, environ +33 %).
 
 L'import **ShareX** lit les images du dossier choisi (sans parcourir les sous-dossiers), les classe par date de modification puis nom, et les copie dans une nouvelle intervention. Les fichiers sources ne sont jamais supprimés ni modifiés. La date de modification n'est pas toujours la date de prise de vue : vérifiez l'ordre après un transfert ayant changé ces dates. Si une image est illisible, l'import signale l'erreur et conserve les images déjà copiées dans le dossier de sortie indiqué. Les masques de capture ne s'appliquent pas à cet import : vérifiez au préalable que les images ShareX peuvent être exportées telles quelles.
 
-Les captures peuvent contenir des données confidentielles. Choisissez un dossier adapté et gérez vous-même sa protection, sa sauvegarde et sa durée de conservation. StepWatch ne transmet aucune capture sur Internet et n'ajoute aucune télémétrie.
+Les captures peuvent contenir des données confidentielles. Choisissez un dossier adapté et gérez vous-même sa protection, sa sauvegarde et sa durée de conservation. StepWatch ne transmet aucune capture sur Internet et n'ajoute aucune télémétrie ; un dossier synchronisé (OneDrive, partage réseau sauvegardé dans le cloud…) enverrait en revanche les captures hors du poste.
+
+Si un antivirus, l'indexeur ou un outil de synchronisation verrouille brièvement un fichier, l'écriture est réessayée. Si `steps.json` ou `rapport.html` ne peut toujours pas être réécrit, la capture PNG est conservée, le journal le signale et l'enregistrement continue : une nouvelle écriture est tentée à la capture suivante et à l'arrêt. Si le verrou persiste jusqu'à la fermeture, les rapports peuvent rester incomplets malgré la présence des PNG ; conservez le dossier et le journal pour récupérer les captures et reconstituer les étapes manquantes. Le programme ne garantit pas la récupération des métadonnées non écrites après la fin du processus.
+
+## Journal de diagnostic
+
+StepWatch tient un journal local pour le support : `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` sous Windows (`~/.local/state/stepwatch/` ailleurs), en rotation sur 4 fichiers de 1 Mo au plus. Le chemin est rappelé au démarrage dans le journal de l'interface. Il reprend les messages de ce journal (sauf les comparaisons ignorées, trop fréquentes) et ajoute la pile d'appels des erreurs, y compris celles des rappels de l'interface et des threads, qui seraient sinon perdues dans l'exécutable sans console. `crash.log`, dans le même dossier, recueille les plantages natifs.
+
+Ce journal ne contient ni image ni frappe clavier, mais il peut contenir des noms d'intervention, des titres de fenêtres et des chemins de dossiers. Il reste sur le poste ; relisez-le avant de le transmettre.
+
+La rotation concerne `stepwatch.log` et ses trois sauvegardes ; `crash.log` est un fichier séparé ajouté à chaque plantage natif. L'interface ne garde qu'un aperçu en attente lorsque son affichage prend du retard : les PNG et les messages de chaque étape sont conservés.
 
 ## Limites de la capture Windows
 
 - La capture utilise les pixels du bureau visible. Gardez la fenêtre choisie visible et dégagée : une fenêtre superposée peut apparaître dans l'image. Le suivi de fenêtre recalcule sa position et sa taille.
+- Un clic local n'est rattaché à la fenêtre choisie que s'il tombe dans sa zone, sur elle-même ou sur une fenêtre qu'elle possède (boîte de dialogue, message d'erreur). Un clic sur une autre fenêtre superposée est ignoré.
 - Une fenêtre fermée, réduite ou invisible produit une erreur explicite. Consultez le journal et sélectionnez une cible valide avant de reprendre une session.
 - Le bureau sécurisé UAC, certains contenus protégés, les fenêtres élevées et les changements de session peuvent empêcher la capture ou la réception des clics. Ne présumez pas que ces écrans ont été documentés.
 - La comparaison visuelle atténue les petites variations et les mouvements isolés, sans garantir l'élimination de toute animation ou la conservation de toute modification très petite. Ajustez le seuil et l'intervalle pour votre intervention.
 - Le mode conservateur augmente la sensibilité et peut conserver davantage de captures. Une modification plus brève que l'intervalle peut ne pas être observée.
+- L'arrêt attend la fin des opérations en cours pour finaliser les fichiers et libérer les hooks. Un appel natif bloqué peut retarder la fermeture : un thread Python ne peut pas être interrompu de force sans risque pour les ressources et les écritures. Une interruption forcée du processus peut laisser un rapport incomplet.
 
 ## Tests automatisés
 
@@ -80,7 +98,7 @@ DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests
 
 Ces tests utilisent une vraie interface Tk et simulent le backend Windows ; ils ne valident pas les hooks Windows. `test_live_capture.py` vérifie aussi une vraie capture MSS d'une fenêtre de test sur l'affichage Linux, son masquage et son export PNG/JSON/HTML.
 
-Pour cette livraison, les **62 tests ont réussi sous Linux**, y compris les tests graphiques sur un écran Xorg virtuel. L'installation du paquet et `pip check` ont également réussi.
+Vérifiez le bilan du runner : les tests graphiques ignorés faute d'affichage ne comptent pas comme réussis. Complétez les tests par `.venv/bin/python -m pip check` sous Linux, ou `.\.venv\Scripts\python.exe -m pip check` sous Windows. Le nombre de tests évolue avec le code ; utilisez les résultats de votre exécution pour valider la version installée.
 
 Les tests avec mocks ne constituent pas une validation des API, hooks ou captures sur Windows réel. L'enregistrement nécessite Windows et une session graphique interactive. Aucune capture Windows réelle ni compilation Windows n'est attestée par les seuls tests exécutés dans l'environnement Linux de développement.
 
@@ -117,6 +135,7 @@ Cette méthode prépare une application portable ; elle ne fournit pas d'install
 - `imaging.py` : masquage, marqueurs et comparaison des images.
 - `engine.py` : capture dans un thread, déclencheurs et événements à destination de l'interface.
 - `storage.py` : images, JSON, rapport hors ligne et import ShareX.
-- `ui.py` : interface Tkinter/ttk en français, sans traitement d'image bloquant dans la boucle graphique.
+- `ui.py` : interface Tkinter/ttk en français ; le moteur prépare les miniatures avant leur affichage par Tk.
+- `diagnostics.py` : journal de diagnostic local en rotation et capture des exceptions non gérées.
 
 Tkinter est fourni avec Python sous Windows et évite d'ajouter un framework lourd à ce dépôt initialement vide. Les dépendances de capture sont Pillow, `mss` et `pynput` (sur Windows). Aucun service réseau, serveur ou compte externe n'est nécessaire pour enregistrer.

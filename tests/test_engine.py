@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from stepwatch.engine import Recorder
+from stepwatch.engine import Recorder, click_annotation
 from stepwatch.models import CaptureConfig, CaptureTarget, Rect
 from stepwatch.platform import CaptureUnavailable
 from stepwatch.storage import SessionStore, StorageError
@@ -31,6 +31,8 @@ class FakeBackend:
         self.block_next = False
         self.grab_entered = threading.Event()
         self.release_grab = threading.Event()
+        self.hit = True  # False: another window covers the click point.
+        self.locate_threads = []
 
     def resolve(self, target):
         self.owner = threading.get_ident()
@@ -39,7 +41,16 @@ class FakeBackend:
         return self.rectangle
 
     def belongs_to_target(self, target, x, y):
-        return self.resolve(target).contains(x, y)
+        return self.hit and self.resolve(target).contains(x, y)
+
+    def locate_click(self, target, x, y):
+        # Runs on the hook thread: must not change the capture owner.
+        self.locate_threads.append(threading.get_ident())
+        if self.error:
+            raise CaptureUnavailable(self.error)
+        if not (self.hit and self.rectangle.contains(x, y)):
+            return None
+        return x - self.rectangle.left, y - self.rectangle.top
 
     def grab(self, rectangle):
         self.grab_times.append(time.monotonic())
@@ -53,6 +64,12 @@ class FakeBackend:
     def close(self):
         self.closed = True
         self.closed_on = threading.get_ident()
+
+
+class LegacyBackend(FakeBackend):
+    """A backend without hook-time hit-testing: the worker checks clicks."""
+
+    locate_click = None
 
 
 class FakeListener:
@@ -166,6 +183,146 @@ class RecorderTests(unittest.TestCase):
         self.assertTrue(self.backend.closed)
         self.assertEqual(self.backend.owner, self.backend.closed_on)
 
+    def test_click_captures_do_not_run_the_visual_comparison(self):
+        self.make_recorder(mode="clicks", click_delay=0)
+        with patch("stepwatch.engine.changed_percent",
+                   side_effect=AssertionError("comparaison inutile")) as compare:
+            listener = self.start()
+            listener.click()
+            self.wait_for(lambda: len(self.saved_events()) == 1)
+            self.assertTrue(self.recorder.stop())
+        compare.assert_not_called()
+        self.assertEqual(self.recorder.state, "stopped")
+
+    def test_click_is_located_when_it_happens_not_when_worker_is_free(self):
+        # The worker is busy (grab, comparison, PNG) while the application
+        # reacts: a context menu now covers the point and the window moved.
+        self.make_recorder(mode="hybrid", interval=.1, click_delay=0)
+        listener = self.start()
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.backend.block_next = True
+        self.assertTrue(self.backend.grab_entered.wait(2))
+        listener.click()
+        self.backend.hit = False
+        self.backend.rectangle = Rect(0, 10, 80, 60)
+        self.backend.release_grab.set()
+        self.wait_for(lambda: any(step["trigger"] == "local_click" for step in self.store.steps))
+        self.assertTrue(self.recorder.stop())
+        step = next(step for step in self.store.steps if step["trigger"] == "local_click")
+        self.assertEqual(step["click"], [10, 10])
+        self.assertEqual(self.backend.locate_threads, [threading.get_ident()])
+
+    def test_clicks_outside_target_are_dropped_at_click_time(self):
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        self.backend.hit = False
+        listener.click()
+        time.sleep(.15)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(self.store.steps, [])
+        self.assertTrue(self.recorder._clicks.empty())
+
+    def test_backend_without_locator_or_failing_locator_falls_back_to_worker(self):
+        legacy = LegacyBackend()
+        self.make_recorder(mode="clicks", click_delay=0, backend_factory=lambda: legacy)
+        listener = self.start()
+        listener.click()
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(self.store.steps[0]["click"], [10, 10])
+
+        self.observed_events.clear()
+        self.listeners.clear()
+        self.backend = FakeBackend()
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        self.backend.error = "La fenêtre sélectionnée est réduite. Restaurez-la."
+        listener.click()  # The hook must not raise into pynput.
+        self.wait_for(lambda: any(event["type"] == "error" for event in self.observed_events))
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(self.store.steps, [])
+
+    def test_double_click_is_one_step_captured_after_the_second_press(self):
+        self.make_recorder(mode="clicks", click_delay=.2)
+        listener = self.start()
+        listener.click()
+        time.sleep(.08)
+        second_press = time.monotonic()
+        listener.click(x=-9)  # A real second press may move by a pixel.
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        time.sleep(.3)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(len(self.store.steps), 1)
+        step = self.store.steps[0]
+        self.assertEqual((step["click_count"], step["click"]), (2, [10, 10]))
+        self.assertEqual(step["annotation"], "Double-clic gauche local.")
+        self.assertGreaterEqual(self.backend.grab_times[0] - second_press, .17)
+        report = (self.store.directory / "rapport.html").read_text(encoding="utf-8")
+        self.assertIn("Étape 1 — Double-clic local", report)
+
+    def test_triple_click_is_one_step(self):
+        self.make_recorder(mode="clicks", click_delay=.2)
+        listener = self.start()
+        for x in (-10, -9, -10):
+            listener.click(x=x)
+            time.sleep(.06)
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        time.sleep(.3)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual([step["click_count"] for step in self.store.steps], [3])
+        self.assertEqual(self.store.steps[0]["annotation"], "Triple-clic gauche local.")
+
+    def test_clicks_apart_in_space_time_or_button_stay_separate(self):
+        self.backend.double_click_settings = lambda: (.1, 2, 2)
+        self.make_recorder(mode="clicks", click_delay=.3)
+        listener = self.start()
+        listener.click()
+        time.sleep(.04)
+        listener.click(x=-5)  # Outside the double-click rectangle.
+        time.sleep(.04)
+        listener.callback(-10, 20, "Button.right", True)  # Another button.
+        time.sleep(.15)
+        listener.click()  # Same place, but after the double-click time.
+        self.wait_for(lambda: len(self.saved_events()) == 4)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual([step["click_count"] for step in self.store.steps], [1, 1, 1, 1])
+        self.assertEqual([step["annotation"] for step in self.store.steps],
+                         ["Clic gauche local.", "Clic gauche local.", "Clic droit local.",
+                          "Clic gauche local."])
+
+    def test_nonconsecutive_spatial_clicks_do_not_form_a_double_click(self):
+        self.make_recorder(mode="clicks", click_delay=.1)
+        listener = self.start()
+        # Keep the worker from draining until every press is queued. A-B-A
+        # must stay chronological; the final A cannot join the first A.
+        with self.recorder._lock:
+            listener.click(x=-10)
+            listener.click(x=0)
+            listener.click(x=-10)
+        self.wait_for(lambda: len(self.store.steps) == 3)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual([step["click_count"] for step in self.store.steps], [1, 1, 1])
+        self.assertEqual([step["click"] for step in self.store.steps],
+                         [[10, 10], [20, 10], [10, 10]])
+
+    def test_intervening_button_press_ends_double_click_sequence(self):
+        self.make_recorder(mode="clicks", click_delay=.1)
+        listener = self.start()
+        with self.recorder._lock:
+            listener.click()
+            listener.callback(-10, 20, "Button.right", True)
+            listener.click()
+        self.wait_for(lambda: len(self.store.steps) == 3)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual([step["click_count"] for step in self.store.steps], [1, 1, 1])
+        self.assertEqual([step["annotation"] for step in self.store.steps],
+                         ["Clic gauche local.", "Clic droit local.", "Clic gauche local."])
+
+    def test_click_annotations_are_french(self):
+        self.assertEqual(click_annotation("Button.right"), "Clic droit local.")
+        self.assertEqual(click_annotation("Button.middle", 4), "Clic molette local répété 4 fois.")
+        self.assertEqual(click_annotation("Button.unknown", 2), "Double-clic Button.unknown local.")
+
     def test_real_separate_clicks_remain_separate_steps(self):
         self.make_recorder(mode="clicks", click_delay=.04)
         listener = self.start()
@@ -230,6 +387,73 @@ class RecorderTests(unittest.TestCase):
         self.assertTrue(self.recorder.stop())
         self.assertEqual(len(self.store.steps), 1)
         self.assertEqual(self.store.steps[0]["click"], [21, 10])
+
+    def test_pause_resume_during_locator_does_not_revive_pre_pause_click(self):
+        entered, release = threading.Event(), threading.Event()
+        real_locate = self.backend.locate_click
+
+        def blocked_locate(target, x, y):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("Test locator was not released")
+            return real_locate(target, x, y)
+
+        self.backend.locate_click = blocked_locate
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        hook_thread = threading.Thread(target=listener.click)
+        self.addCleanup(hook_thread.join, 3)
+        self.addCleanup(release.set)
+        hook_thread.start()
+        self.assertTrue(entered.wait(2))
+        self.recorder.pause()
+        self.recorder.resume()
+        release.set()
+        hook_thread.join(2)
+        self.assertFalse(hook_thread.is_alive())
+        listener.click(x=0)
+        self.wait_for(lambda: any(step["click"] == [20, 10] for step in self.store.steps))
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual([step["click"] for step in self.store.steps], [[20, 10]])
+
+    def test_stop_during_locator_does_not_enqueue_or_save_click(self):
+        entered, release = threading.Event(), threading.Event()
+        real_locate = self.backend.locate_click
+
+        def blocked_locate(target, x, y):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("Test locator was not released")
+            return real_locate(target, x, y)
+
+        self.backend.locate_click = blocked_locate
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        hook_thread = threading.Thread(target=listener.click)
+        self.addCleanup(hook_thread.join, 3)
+        self.addCleanup(release.set)
+        hook_thread.start()
+        self.assertTrue(entered.wait(2))
+        self.recorder.stop(timeout=0)
+        release.set()
+        hook_thread.join(2)
+        self.assertFalse(hook_thread.is_alive())
+        self.assertTrue(self.recorder.stop())
+        self.assertTrue(self.recorder._clicks.empty())
+        self.assertEqual(self.store.steps, [])
+
+    def test_debounce_does_not_drop_same_position_click_after_resume(self):
+        self.make_recorder(mode="clicks", click_delay=.1)
+        listener = self.start()
+        instant = time.monotonic()
+        with self.recorder._lock, patch("stepwatch.engine.time.monotonic", return_value=instant):
+            listener.click()
+            self.recorder.pause()
+            self.recorder.resume()
+            listener.click()
+        self.wait_for(lambda: len(self.store.steps) == 1)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(self.store.steps[0]["click_count"], 1)
 
     def test_pause_during_grab_discards_image_and_resumes_cleanly(self):
         self.make_recorder(mode="visual")
@@ -302,6 +526,41 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(self.saved_events(), [])
         self.assertTrue(any("Disque plein" in event["message"] for event in self.observed_events))
 
+    def test_transient_report_lock_does_not_end_the_recording(self):
+        self.make_recorder(mode="visual")
+        real_flush = self.store._flush
+        failures = {"left": 1}
+
+        def flaky_flush():
+            if failures["left"]:
+                failures["left"] -= 1
+                raise PermissionError(13, "fichier verrouillé par l’antivirus")
+            real_flush()
+
+        with patch.object(self.store, "_flush", side_effect=flaky_flush):
+            self.recorder.start()
+            self.wait_for(lambda: len(self.saved_events()) == 1)
+            self.backend.image = Image.new("RGB", (80, 60), "white")
+            self.wait_for(lambda: len(self.saved_events()) == 2)
+            self.assertTrue(self.recorder.stop())
+        self.assertEqual(self.recorder.state, "stopped")
+        messages = [event["message"] for event in self.observed_events]
+        self.assertEqual(sum("rapport non mis à jour" in message for message in messages), 1)
+        self.assertIn("Rapport de nouveau à jour.", messages)
+        metadata = json.loads((self.store.directory / "steps.json").read_text(encoding="utf-8"))
+        self.assertEqual([step["index"] for step in metadata["steps"]], [1, 2])
+
+    def test_fatal_error_traceback_goes_to_the_diagnostic_log(self):
+        self.make_recorder(mode="visual")
+        with self.assertLogs("stepwatch.engine", level="ERROR") as logs, \
+                patch.object(self.store, "save", side_effect=StorageError("Disque plein")):
+            self.recorder.start()
+            self.wait_for(lambda: self.recorder.state == "error")
+            self.assertTrue(self.recorder.stop())
+        record = next(record for record in logs.records if record.exc_info)
+        self.assertEqual(record.getMessage(), "Enregistrement interrompu")
+        self.assertIn("Disque plein", str(record.exc_info[1]))
+
     def test_report_write_failure_at_stop_is_explicit(self):
         self.make_recorder(mode="visual")
         self.start()
@@ -347,6 +606,39 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(metadata["steps"], [])
         self.assertEqual(self.listeners, [])
         self.assertFalse(self.backend.closed)
+
+    def test_saved_event_carries_bounded_preview_and_png_stays_full_size(self):
+        self.backend.rectangle = Rect(0, 0, 3200, 2000)
+        self.backend.image = Image.new("RGB", (3200, 2000), "white")
+        self.make_recorder(mode="visual")
+        self.recorder.start()
+        self.wait_for(lambda: len(self.store.steps) == 1)
+        self.assertTrue(self.recorder.stop())
+        previews = []
+        while not self.recorder.events.empty():
+            event = self.recorder.events.get_nowait()
+            if event["type"] == "saved":
+                previews.append(event["image"].size)
+        self.assertEqual(previews, [(1600, 1000)])
+        with Image.open(self.store.directory / self.store.steps[0]["image"]) as saved:
+            self.assertEqual(saved.size, (3200, 2000))
+
+    def test_final_status_is_queued_before_final_state(self):
+        self.make_recorder(mode="visual")
+        states_at_final_status = []
+        emit = self.recorder._emit
+
+        def spy(kind, message, **extra):
+            if kind == "status" and "arrêté" in message:
+                states_at_final_status.append(self.recorder.state)
+            emit(kind, message, **extra)
+
+        self.recorder._emit = spy
+        self.recorder.start()
+        self.wait_for(lambda: len(self.store.steps) == 1)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(states_at_final_status, ["stopping"])
+        self.assertEqual(self.recorder.state, "stopped")
 
     def test_redaction_applies_to_saved_image_and_click_marker(self):
         self.make_recorder(mode="clicks", click_delay=0,

@@ -48,6 +48,29 @@ def enable_dpi_awareness() -> bool:
         return False
 
 
+#: Windows defaults: 500 ms and a 4 x 4 pixel rectangle around the first press.
+DEFAULT_DOUBLE_CLICK = (0.5, 2, 2)
+
+
+def double_click_settings() -> tuple[float, int, int]:
+    """Double-click time (s) and half-size (px) of the double-click rectangle."""
+    if sys.platform != "win32":
+        return DEFAULT_DOUBLE_CLICK
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetDoubleClickTime.argtypes = []
+        user32.GetDoubleClickTime.restype = wintypes.UINT
+        user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        seconds = user32.GetDoubleClickTime() / 1000
+        width, height = user32.GetSystemMetrics(36), user32.GetSystemMetrics(37)  # SM_C?DOUBLECLK
+    except (AttributeError, OSError):
+        return DEFAULT_DOUBLE_CLICK
+    if seconds <= 0 or width <= 0 or height <= 0:
+        return DEFAULT_DOUBLE_CLICK
+    return seconds, max(1, width // 2), max(1, height // 2)
+
+
 class _NativeWindows:
     """Small typed Win32 adapter; an adapter can be injected into the backend."""
 
@@ -66,6 +89,7 @@ class _NativeWindows:
             "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
             "WindowFromPoint": ([wintypes.POINT], wintypes.HWND),
             "GetAncestor": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+            "GetWindow": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.user32, name)
@@ -128,6 +152,9 @@ class _NativeWindows:
         if not handle:
             return 0
         return int(self.user32.GetAncestor(handle, 2) or handle)  # GA_ROOT
+
+    def owner(self, hwnd: int) -> int:
+        return int(self.user32.GetWindow(hwnd, 4) or 0)  # GW_OWNER
 
 
 class WindowsBackend:
@@ -200,11 +227,43 @@ class WindowsBackend:
         except ValueError as exc:
             raise CaptureUnavailable("La fenêtre sélectionnée n'a pas de surface visible.") from exc
 
+    def double_click_settings(self) -> tuple[float, int, int]:
+        return double_click_settings()
+
     def belongs_to_target(self, target: CaptureTarget, x: int, y: int) -> bool:
+        return self.locate_click(target, x, y) is not None
+
+    def locate_click(self, target: CaptureTarget, x: int, y: int) -> tuple[int, int] | None:
+        """Return target-relative click coordinates, or None outside the target.
+
+        Meant to run on the mouse-hook thread at the time of the click, before
+        the application reacts to it. It only issues stateless Win32 queries
+        and never touches MSS, so it does not conflict with the capture owner.
+        """
         rectangle = self.resolve(target)
         if not rectangle.contains(x, y):
-            return False
-        return target.kind != "window" or self._windows().window_at(x, y) == target.hwnd
+            return None
+        if target.kind == "window" and not self._owned_by(self._windows().window_at(x, y),
+                                                          target.hwnd):
+            return None
+        return x - rectangle.left, y - rectangle.top
+
+    def _owned_by(self, hwnd: int, target_hwnd: int) -> bool:
+        """True for the target itself or a window it owns, directly or not.
+
+        GA_ROOT stops at owned top-level windows: without walking the owner
+        chain, a click on the target's dialog or message box was dropped.
+        """
+        owner_of = getattr(self._windows(), "owner", None)
+        for _ in range(16):  # Owner chains are short; never loop forever.
+            if not hwnd:
+                return False
+            if hwnd == target_hwnd:
+                return True
+            if owner_of is None:
+                return False
+            hwnd = owner_of(hwnd)
+        return False
 
     def grab(self, rectangle: Rect):
         """Capture only if the target intersects a physical monitor.
@@ -227,7 +286,9 @@ class WindowsBackend:
                     "Replacez la fenêtre ou la zone sur un moniteur."
                 )
             screenshot = screen.grab(rectangle.as_dict())
-            return Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+            # Decode MSS' native BGRA buffer in one C pass; its ``rgb``
+            # property first repacks every pixel (about 70 ms more in 4K).
+            return Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
         except CaptureUnavailable:
             raise
         except Exception as exc:
