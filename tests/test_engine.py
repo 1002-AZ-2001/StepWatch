@@ -655,3 +655,140 @@ class RecorderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ButtonBackend(FakeBackend):
+    """Exposes the physical button probe used by the hook watchdog."""
+
+    def __init__(self):
+        super().__init__()
+        self.button_down = False
+
+    def mouse_button_down(self):
+        return self.button_down
+
+
+class HookWatchdogTests(unittest.TestCase):
+    """Windows can remove a timed-out low-level hook without ending its thread."""
+
+    # Reuse the recorder fixtures without inheriting (and re-running) its tests.
+    make_recorder = RecorderTests.make_recorder
+    shutdown = RecorderTests.shutdown
+    wait_for = RecorderTests.wait_for
+    drain_events = RecorderTests.drain_events
+    start = RecorderTests.start
+    saved_events = RecorderTests.saved_events
+
+    def setUp(self):
+        RecorderTests.setUp(self)
+        self.backend = ButtonBackend()
+
+    def press_without_hook(self):
+        self.backend.button_down = True
+        time.sleep(.08)  # Several worker polls see the physical press.
+        self.backend.button_down = False
+
+    def test_unreported_press_reinstalls_the_hook(self):
+        self.make_recorder(mode="clicks")
+        with patch("stepwatch.engine.HOOK_SILENCE_GRACE", .2):
+            self.recorder.start()
+            self.wait_for(lambda: bool(self.listeners) and self.listeners[0].started.is_set())
+            self.press_without_hook()
+            self.wait_for(lambda: len(self.listeners) == 2, "Le hook n'a pas été réinstallé")
+        old, new = self.listeners
+        self.assertEqual(old.stops, 1)
+        self.assertTrue(new.started.is_set())
+        self.assertEqual(self.recorder.hook_restarts, 1)
+        errors = [event for event in self.observed_events if event["type"] == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertIn("réinstallé", errors[0]["message"])
+        # The new hook is used for the following clicks.
+        new.click()
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.assertTrue(self.recorder.stop())
+        self.assertEqual(self.recorder.state, "stopped")
+        self.assertEqual(new.stops, 1)
+
+    def test_reported_press_keeps_the_hook(self):
+        self.make_recorder(mode="clicks")
+        with patch("stepwatch.engine.HOOK_SILENCE_GRACE", .2):
+            listener = self.start()
+            self.backend.button_down = True
+            listener.click()
+            time.sleep(.08)
+            listener.click(pressed=False)
+            self.backend.button_down = False
+            time.sleep(.4)
+        self.drain_events()
+        self.assertEqual(len(self.listeners), 1)
+        self.assertEqual(self.recorder.hook_restarts, 0)
+        self.assertTrue(self.recorder.stop())
+
+    def test_paused_recording_still_proves_the_hook_alive(self):
+        self.make_recorder(mode="clicks")
+        with patch("stepwatch.engine.HOOK_SILENCE_GRACE", .2):
+            listener = self.start()
+            self.recorder.pause()
+            self.backend.button_down = True
+            listener.click()
+            time.sleep(.08)
+            self.backend.button_down = False
+            time.sleep(.4)
+        self.assertEqual(len(self.listeners), 1)
+        self.assertTrue(self.recorder.stop())
+
+    def test_visual_mode_has_no_hook_to_watch(self):
+        self.make_recorder(mode="visual")
+        with patch("stepwatch.engine.HOOK_SILENCE_GRACE", .1):
+            self.recorder.start()
+            self.press_without_hook()
+            time.sleep(.3)
+        self.assertEqual(self.listeners, [])
+        self.assertTrue(self.recorder.stop())
+
+
+class NoteTests(unittest.TestCase):
+    make_recorder = RecorderTests.make_recorder
+    shutdown = RecorderTests.shutdown
+    wait_for = RecorderTests.wait_for
+    drain_events = RecorderTests.drain_events
+    start = RecorderTests.start
+    saved_events = RecorderTests.saved_events
+
+    def setUp(self):
+        RecorderTests.setUp(self)
+
+    def test_note_is_written_by_the_worker_on_the_latest_step(self):
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        self.recorder.add_note("avant toute capture")
+        self.wait_for(lambda: any(e["type"] == "error" and "Aucune capture" in e["message"]
+                                  for e in self.observed_events))
+        listener.click()
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.recorder.pause()
+        self.recorder.add_note("Pare-feu désactivé")
+        self.wait_for(lambda: any(e["type"] == "note" for e in self.observed_events))
+        self.assertIn("Note : Pare-feu désactivé", self.store.steps[0]["annotation"])
+        self.assertTrue(self.recorder.stop())
+
+    def test_note_typed_just_before_stop_is_kept(self):
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        listener.click()
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.recorder.add_note("dernière remarque")
+        self.assertTrue(self.recorder.stop())
+        data = json.loads((self.store.directory / "steps.json").read_text(encoding="utf-8"))
+        self.assertIn("Note : dernière remarque", data["steps"][0]["annotation"])
+
+    def test_notes_are_refused_outside_a_recording(self):
+        self.make_recorder(mode="clicks")
+        with self.assertRaises(RuntimeError):
+            self.recorder.add_note("trop tôt")
+        self.start()
+        with self.assertRaises(ValueError):
+            self.recorder.add_note("  ")
+        self.assertTrue(self.recorder.stop())
+        with self.assertRaises(RuntimeError):
+            self.recorder.add_note("trop tard")

@@ -11,8 +11,9 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from stepwatch.storage import (ReportWriteError, SessionStore, StorageError, _local_time,
-                               export_standalone, import_sharex)
+from stepwatch.storage import (MARKDOWN_REPORT, NOTE_MAX_LENGTH, ReportWriteError, SessionStore,
+                               StorageError, _local_time, export_markdown, export_standalone,
+                               import_sharex)
 
 
 class StorageTests(unittest.TestCase):
@@ -153,6 +154,71 @@ class StorageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fuseau"):
             store.save(self.image, "click", timestamp=datetime(2026, 1, 1))
         self.assertEqual(store.steps, [])
+
+
+class NoteAndMarkdownTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.image = Image.new("RGB", (16, 12), "#135a8f")
+
+    def test_note_requires_a_capture_and_is_added_to_the_latest_step(self):
+        store = SessionStore(self.root, "Notes")
+        with self.assertRaises(StorageError):
+            store.add_note("trop tôt")
+        store.save(self.image, "initial")
+        store.save(self.image, "local_click", (3, 4), "Clic gauche local.")
+        step = store.add_note("  Redémarrage   du\nservice  ")
+        self.assertEqual(step["index"], 2)
+        self.assertEqual(step["annotation"], "Clic gauche local.\nNote : Redémarrage du service")
+        data = json.loads((store.directory / "steps.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["steps"][1]["annotation"], step["annotation"])
+        self.assertEqual(data["steps"][0]["annotation"], "")
+        self.assertIn("Note : Redémarrage du service",
+                      (store.directory / "rapport.html").read_text(encoding="utf-8"))
+        with self.assertRaises(ValueError):
+            store.add_note("   ")
+        long_step = store.add_note("x" * (NOTE_MAX_LENGTH + 50))
+        self.assertTrue(long_step["annotation"].endswith("Note : " + "x" * NOTE_MAX_LENGTH))
+
+    def test_note_kept_in_memory_when_the_report_is_locked(self):
+        store = SessionStore(self.root, "Notes")
+        store.save(self.image, "initial")
+        with patch.object(store, "_flush", side_effect=PermissionError("verrou")):
+            with self.assertRaises(ReportWriteError) as caught:
+                store.add_note("à écrire")
+        self.assertIn("Note : à écrire", caught.exception.step["annotation"])
+        store.close()
+        data = json.loads((store.directory / "steps.json").read_text(encoding="utf-8"))
+        self.assertIn("Note : à écrire", data["steps"][0]["annotation"])
+
+    def test_close_writes_an_escaped_markdown_report(self):
+        store = SessionStore(self.root, "Poste *client* <b>")
+        store.save(self.image, "local_click", (5, 6), "Clic [lien](http://x) local.", click_count=2)
+        store.add_note("<script>alert(1)</script> # titre")
+        store.close()
+        markdown = (store.directory / MARKDOWN_REPORT).read_text(encoding="utf-8")
+        self.assertIn("# Poste \\*client\\* \\<b\\>", markdown)
+        self.assertIn("## Étape 1 — Double\\-clic local", markdown)
+        self.assertIn("Clic \\[lien\\]\\(http://x\\) local.", markdown)
+        self.assertNotIn("<script>", markdown)
+        self.assertIn("Clic local : (5, 6)", markdown)
+        self.assertIn("![Capture de l’étape 1](<captures/000001.png>)", markdown)
+
+    def test_markdown_export_rebuilds_from_steps_json_and_refuses_foreign_paths(self):
+        store = SessionStore(self.root, "Export")
+        store.save(self.image, "initial")
+        store.close()
+        (store.directory / MARKDOWN_REPORT).unlink()
+        self.assertEqual(export_markdown(store.directory), store.directory / MARKDOWN_REPORT)
+        self.assertIn("captures/000001.png", (store.directory / MARKDOWN_REPORT).read_text(encoding="utf-8"))
+        path = store.directory / "steps.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["steps"][0]["image"] = "../secret.png"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaises(StorageError):
+            export_markdown(store.directory)
 
 
 class StandaloneReportTests(unittest.TestCase):

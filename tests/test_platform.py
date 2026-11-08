@@ -140,6 +140,16 @@ class BackendTests(unittest.TestCase):
         self.native.hit = 1
         self.assertIsNone(self.backend.locate_click(self.target, -190, 20))
 
+    def test_button_probe_for_hook_watchdog_never_raises(self):
+        self.assertFalse(self.backend.mouse_button_down())  # Adapter without probe.
+        self.native.mouse_button_down = lambda: True
+        self.assertTrue(self.backend.mouse_button_down())
+
+        def broken():
+            raise OSError("user32 indisponible")
+        self.native.mouse_button_down = broken
+        self.assertFalse(self.backend.mouse_button_down())
+
     def test_rgb_capture_and_cleanup(self):
         image = self.backend.grab(Rect(0, 0, 2, 1))
         self.assertEqual(image.mode, "RGB")

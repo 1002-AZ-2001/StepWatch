@@ -18,7 +18,7 @@ from stepwatch.events import PreviewEventQueue
 from stepwatch.imaging import apply_masks, changed_percent, mark_click
 from stepwatch.models import CaptureConfig, CaptureTarget
 from stepwatch.platform import DEFAULT_DOUBLE_CLICK, CaptureUnavailable, WindowsBackend
-from stepwatch.storage import ReportWriteError, SessionStore
+from stepwatch.storage import ReportWriteError, SessionStore, StorageError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -31,6 +31,19 @@ PREVIEW_MAX_SIZE = (1600, 1000)
 #: hook (backend without ``locate_click`` or query failure): the worker
 #: re-checks it and reports the error through the usual path.
 _UNRESOLVED = object()
+
+#: Windows 7+ silently removes a low-level hook whose callback times out
+#: (LowLevelHooksTimeout), and the listener thread stays alive. The watchdog
+#: polls the physical button state: a press the hook never reports within
+#: this delay means the hook is gone, and it is reinstalled.
+HOOK_SILENCE_GRACE = 1.0
+#: Back-off ceiling when presses stay unreported after a reinstallation (for
+#: instance a higher-integrity window under the cursor, which also filters
+#: low-level hooks): never restart the hook in a tight loop.
+HOOK_SILENCE_GRACE_MAX = 30.0
+#: Hit-tests slower than this in the hook callback are logged: they approach
+#: the LowLevelHooksTimeout budget (300 ms by default).
+SLOW_HOOK_CALLBACK = 0.1
 
 
 _BUTTON_NAMES = {
@@ -81,11 +94,15 @@ class Recorder:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._clicks = queue.Queue()
+        self._notes = queue.Queue()
         self._thread = None
         self._kept = self._ignored = 0
         self._last_press = None
         self._epoch = 0
         self._locate = None  # Set by the worker before the mouse hook starts.
+        self._last_hook_event = float("-inf")  # Monotonic; any press/release.
+        self.hook_restarts = 0
+        self._slow_hook = 0.0  # Slowest hit-test since last logged, seconds.
 
     @property
     def state(self):
@@ -148,12 +165,44 @@ class Recorder:
             thread.join(timeout=max(0, timeout))
         return thread is None or not thread.is_alive()
 
+    def add_note(self, text: str) -> None:
+        """Queue a note for the latest step; written by the capture thread.
+
+        Notes are accepted while recording or paused: the store is only ever
+        touched by the worker, so a note never races a capture being saved.
+        """
+        if not str(text).strip():
+            raise ValueError("La note est vide.")
+        with self._lock:
+            if self._state not in ("recording", "paused"):
+                raise RuntimeError("Aucun enregistrement en cours.")
+            self._notes.put(str(text))
+        self._wake.set()
+
+    def _write_notes(self):
+        while True:
+            try:
+                text = self._notes.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                step = self.store.add_note(text)
+            except ReportWriteError as exc:
+                self._emit("error", str(exc), step=exc.step)
+            except (StorageError, ValueError) as exc:
+                self._emit("error", str(exc))
+            else:
+                self._emit("note", f"Note ajoutée à l’étape {step['index']}.", step=step)
+
     def _on_click(self, x, y, button, pressed):
         # A release is not another click. Coalesce duplicate hook notifications,
         # preserving real double-clicks (usually > 30 ms apart).
+        now = time.monotonic()
+        # Any notification, including releases and paused periods, proves
+        # that Windows still calls the hook (see HOOK_SILENCE_GRACE).
+        self._last_hook_event = now
         if not pressed:
             return
-        now = time.monotonic()
         x, y = int(x), int(y)
         with self._lock:
             if self._state != "recording" or self.config.mode == "visual":
@@ -170,6 +219,10 @@ class Recorder:
                 located = locate(x, y)
             except Exception:
                 located = _UNRESOLVED
+            elapsed = time.monotonic() - now
+            if elapsed > SLOW_HOOK_CALLBACK:
+                # Logged by the worker: no file I/O inside the native hook.
+                self._slow_hook = max(self._slow_hook, elapsed)
             if located is None:
                 return  # Outside the target or on another window.
         with self._lock:
@@ -184,6 +237,22 @@ class Recorder:
             self._last_press = (key, now)
             self._clicks.put((now, x, y, str(button), epoch, located))
         self._wake.set()
+
+    def _restart_listener(self, listener):
+        """Replace a hook that Windows removed without stopping its thread."""
+        try:
+            listener.stop()
+            listener.join(timeout=2)
+        except Exception:
+            LOGGER.exception("Arrêt de l'ancien hook souris impossible")
+        replacement = self._listener_factory(self._on_click)
+        replacement.start()
+        self.hook_restarts += 1
+        message = ("Le hook souris ne recevait plus les clics (retiré par Windows ?) ; "
+                   "il a été réinstallé. Des clics ont pu manquer : vérifiez les dernières étapes.")
+        LOGGER.warning("Hook souris réinstallé (%d)", self.hook_restarts)
+        self._emit("error" if self.hook_restarts == 1 else "log", message)
+        return replacement
 
     def _ignored_event(self, message):
         self._ignored += 1
@@ -215,11 +284,39 @@ class Recorder:
             if self.config.mode != "visual":
                 listener = self._listener_factory(self._on_click)
                 listener.start()
+            button_down = getattr(backend, "mouse_button_down", None)
+            watch_hook = listener is not None and callable(button_down)
+            was_down = False
+            previous_poll = time.monotonic()
+            unreported_since = unreported_after = None
+            grace = HOOK_SILENCE_GRACE
             while not self._stop.is_set():
                 self._wake.clear()
                 if listener is not None and not listener.is_alive():
                     raise RuntimeError("Le hook souris s’est interrompu ; l’enregistrement est arrêté.")
                 now = time.monotonic()
+                self._write_notes()
+                if self._slow_hook:
+                    slow, self._slow_hook = self._slow_hook, 0.0
+                    LOGGER.warning("Localisation du clic lente dans le hook souris : %.0f ms", slow * 1000)
+                if watch_hook:
+                    try:
+                        down = bool(button_down())
+                    except Exception:
+                        down = False
+                    if down and not was_down and unreported_since is None:
+                        # The press happened after the previous poll: the
+                        # hook must report something from that point on.
+                        unreported_since, unreported_after = now, previous_poll
+                    was_down, previous_poll = down, now
+                    if unreported_since is not None:
+                        if self._last_hook_event >= unreported_after - .05:
+                            unreported_since = None
+                            grace = HOOK_SILENCE_GRACE
+                        elif now - unreported_since >= grace:
+                            listener = self._restart_listener(listener)
+                            unreported_since = None
+                            grace = min(grace * 2, HOOK_SILENCE_GRACE_MAX)
                 with self._lock:
                     state, epoch = self._state, self._epoch
                 if epoch != active_epoch:
@@ -376,6 +473,10 @@ class Recorder:
                 self._locate = None
             if pending or not self._clicks.empty():
                 self._emit("log", "Les clics encore en attente ont été annulés à l’arrêt.")
+            try:
+                self._write_notes()  # A note typed just before Stop is kept.
+            except Exception:
+                LOGGER.exception("Notes non écrites à l’arrêt")
             for resource in (listener, backend):
                 if resource is None:
                     continue
