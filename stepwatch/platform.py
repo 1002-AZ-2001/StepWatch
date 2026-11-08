@@ -90,6 +90,7 @@ class _NativeWindows:
             "WindowFromPoint": ([wintypes.POINT], wintypes.HWND),
             "GetAncestor": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
             "GetWindow": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+            "GetAsyncKeyState": ([ctypes.c_int], ctypes.c_short),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.user32, name)
@@ -116,6 +117,16 @@ class _NativeWindows:
                     and cloaked.value):
                 return False
         return True
+
+    def mouse_button_down(self) -> bool:
+        """True while the left, right or middle physical button is held.
+
+        Polled by the hook watchdog; independent of the low-level hook. The
+        most significant bit means "currently down" (the low bit is unusable
+        across processes).
+        """
+        return any(self.user32.GetAsyncKeyState(key) & 0x8000
+                   for key in (0x01, 0x02, 0x04))  # VK_LBUTTON, VK_RBUTTON, VK_MBUTTON
 
     def is_minimized(self, hwnd: int) -> bool:
         return bool(self.user32.IsIconic(hwnd))
@@ -229,6 +240,16 @@ class WindowsBackend:
 
     def double_click_settings(self) -> tuple[float, int, int]:
         return double_click_settings()
+
+    def mouse_button_down(self) -> bool:
+        """Physical mouse button state for the hook watchdog; False if unknown."""
+        query = getattr(self._windows(), "mouse_button_down", None)
+        if query is None:
+            return False
+        try:
+            return bool(query())
+        except Exception:  # A failed probe must never stop a recording.
+            return False
 
     def belongs_to_target(self, target: CaptureTarget, x: int, y: int) -> bool:
         return self.locate_click(target, x, y) is not None

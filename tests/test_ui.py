@@ -248,6 +248,8 @@ class UITests(unittest.TestCase):
         self.app._poll()
         self.assertIn("Rapport autonome :", self.app.log.get("1.0", "end"))
         self.assertTrue((store.directory / "rapport-autonome.html").is_file())
+        self.assertIn("Rapport Markdown :", self.app.log.get("1.0", "end"))
+        self.assertTrue((store.directory / "rapport.md").is_file())
 
     def test_export_retries_current_sessions_failed_final_report_flush(self):
         store = SessionStore(Path(self.temp.name), "Rapport en retard")
@@ -377,11 +379,22 @@ class UITests(unittest.TestCase):
                 self.state = "stopped"
                 return True
 
+            def add_note(self, text):
+                self.notes.append(text)
+
         recorder = FakeRecorder()
+        recorder.notes = []
+        self.assertEqual(str(self.app.note_button["state"]), "disabled")
         recorder.state = "recording"
         self.app._recorder = recorder
         self.app._update_controls()
         self.assertEqual(str(self.app.start_button["state"]), "disabled")
+        self.assertEqual(str(self.app.note_button["state"]), "normal")
+        with patch("stepwatch.ui.simpledialog.askstring", return_value="Câble réseau débranché"):
+            self.app._add_note()
+        with patch("stepwatch.ui.simpledialog.askstring", return_value=None):
+            self.app._add_note()  # Cancelled dialog: nothing is sent.
+        self.assertEqual(recorder.notes, ["Câble réseau débranché"])
         self.app._pause()
         self.assertEqual(recorder.state, "paused")
         self.assertEqual(str(self.app.resume_button["state"]), "normal")

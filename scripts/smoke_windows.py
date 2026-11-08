@@ -84,6 +84,9 @@ def native_smoke() -> None:
         target = selected[0]
         monitors = backend.list_monitors()
         require(bool(monitors), "MSS did not report a physical monitor")
+        # Hook watchdog probe: the real GetAsyncKeyState binding must answer.
+        require(isinstance(backend._windows().mouse_button_down(), bool),
+                "GetAsyncKeyState did not report the mouse button state")
         initial = backend.resolve(target)
         # DWM composition can finish after Tk's update() returns. Wait for
         # actual painted pixels, rather than relying on a fixed startup sleep.

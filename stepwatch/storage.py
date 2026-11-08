@@ -41,6 +41,12 @@ _REPLACE_ATTEMPTS = 6 if os.name == "nt" else 1
 _REPLACE_DELAY = 0.05  # Doubled after each failed attempt: 1.55 s at most.
 
 
+#: zlib level for captures. Pillow defaults to 6; on 1080p desktop-like and
+#: noisy test images, level 3 encoded 23-63 % faster and produced 5-20 %
+#: smaller files. Encoding runs on the capture thread, so speed matters.
+PNG_COMPRESS_LEVEL = 3
+
+
 def _replace(source: Path, destination: Path) -> None:
     delay = _REPLACE_DELAY
     for attempt in range(1, _REPLACE_ATTEMPTS + 1):
@@ -142,7 +148,7 @@ class SessionStore:
                 dir=destination.parent, prefix=".stepwatch-", suffix=".tmp", delete=False,
             ) as handle:
                 temporary = Path(handle.name)
-                image.convert("RGB").save(handle, format="PNG")
+                image.convert("RGB").save(handle, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
                 handle.flush()
                 os.fsync(handle.fileno())
             _replace(temporary, destination)
@@ -173,10 +179,36 @@ class SessionStore:
         _atomic_text(self.directory / "steps.json", json.dumps(metadata, ensure_ascii=False, indent=2))
         _atomic_text(self.directory / "rapport.html", self._html())
 
+    def add_note(self, text: str) -> dict[str, Any]:
+        """Append a technician's note to the latest step and rewrite reports.
+
+        Call it from the thread that saves captures (the recorder routes notes
+        through its worker). Raises StorageError before the first capture and
+        ReportWriteError when the note is kept in memory but not yet written.
+        """
+        text = " ".join(str(text).split())[:NOTE_MAX_LENGTH]
+        if not text:
+            raise ValueError("La note est vide.")
+        if not self.steps:
+            raise StorageError("Aucune capture à annoter pour l’instant : la note n’a pas été ajoutée.")
+        step = self.steps[-1]
+        step["annotation"] = "\n".join(filter(None, (step["annotation"], f"Note : {text}")))
+        try:
+            self._flush()
+        except (OSError, ValueError) as exc:
+            raise ReportWriteError(
+                f"Note conservée pour l’étape {step['index']}, mais rapport non mis à jour : {exc}. "
+                "Nouvel essai à la prochaine capture et à l'arrêt.",
+                dict(step),
+            ) from exc
+        return dict(step)
+
     def close(self) -> None:
         """Flush/rebuild the reports; may be called repeatedly after stopping."""
         try:
             self._flush()
+            _atomic_text(self.directory / MARKDOWN_REPORT,
+                         _markdown(self.name, self.started_at, self.steps))
         except (OSError, ValueError) as exc:
             raise StorageError(f"Export incomplet dans {self.directory} : {exc}") from exc
 
@@ -275,6 +307,71 @@ def _report_article(step: dict[str, Any], source: str, link: bool = True) -> str
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 STANDALONE_REPORT = "rapport-autonome.html"
+MARKDOWN_REPORT = "rapport.md"
+NOTE_MAX_LENGTH = 2000
+
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]<>()#+!|~-])")
+
+
+def _markdown_text(value: str) -> str:
+    """Literal text in Markdown: no inline HTML, links or formatting."""
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", value)
+
+
+def _capture_parts(step: dict[str, Any]) -> list[str]:
+    """Validated ``captures/<name>.png`` components of a step's image path."""
+    image = step["image"]
+    parts = image.split("/")
+    # Validate the stored POSIX-relative form before Path can normalise away
+    # dot segments, duplicate separators or Windows drive/stream syntax.
+    if (len(parts) != 2 or parts[0] != "captures"
+            or not parts[1] or parts[1] in {".", ".."}
+            or "\\" in image or ":" in image
+            or any(ord(character) < 32 for character in image)
+            or Path(parts[1]).suffix.lower() != ".png"):
+        raise StorageError(f"Étape {step['index']} : image hors du dossier captures/ refusée.")
+    return parts
+
+
+def _markdown(name: str, started_at: str, steps: list[dict[str, Any]]) -> str:
+    """rapport.md: same content as rapport.html, for wikis and tickets.
+
+    Image links stay relative to the session folder, like rapport.html.
+    """
+    lines = [f"# {_markdown_text(name)}", "",
+             f"Rapport StepWatch · {len(steps)} capture(s) · début : "
+             f"{_markdown_text(_local_time(started_at))} (heure locale du poste)", ""]
+    for step in steps:
+        trigger = _TRIGGER_LABELS.get(step["trigger"], step["trigger"])
+        count = step.get("click_count", 1)
+        if step["trigger"] in ("click", "local_click") and count > 1:
+            trigger = {2: "Double-clic local", 3: "Triple-clic local"}.get(count, f"{count} clics locaux")
+        index = int(step["index"])
+        lines += [f"## Étape {index} — {_markdown_text(trigger)}", "",
+                  f"*{_markdown_text(_local_time(step['timestamp']))}*", ""]
+        for line in str(step.get("annotation") or "").splitlines():
+            lines += [_markdown_text(line) + "  "]
+        if step.get("annotation"):
+            lines.append("")
+        if step.get("click") is not None:
+            lines += [f"Clic local : ({int(step['click'][0])}, {int(step['click'][1])}) "
+                      "pixels relatifs à la zone.", ""]
+        _capture_parts(step)  # Refuse paths outside captures/.
+        lines += [f"![Capture de l’étape {index}](<{step['image']}>)", ""]
+    lines.append("Rapport local. Un changement visuel ne permet pas d’identifier un clic du client distant.")
+    return "\n".join(lines) + "\n"
+
+
+def export_markdown(directory: Path) -> Path:
+    """(Re)write rapport.md of any session folder from its steps.json."""
+    directory = Path(directory)
+    name, started_at, steps = _read_steps(directory)
+    destination = directory / MARKDOWN_REPORT
+    try:
+        _atomic_text(destination, _markdown(name, started_at, steps))
+    except OSError as exc:
+        raise StorageError(f"Écriture de {destination} impossible : {exc}") from exc
+    return destination
 
 
 def _read_steps(directory: Path) -> tuple[str, str, list[dict[str, Any]]]:
@@ -303,16 +400,7 @@ def _read_steps(directory: Path) -> tuple[str, str, list[dict[str, Any]]]:
 
 def _embedded_png(directory: Path, step: dict[str, Any]) -> str:
     """data: URI of a step's capture; only PNG files directly in captures/."""
-    image = step["image"]
-    parts = image.split("/")
-    # Validate the stored POSIX-relative form before Path can normalise away
-    # dot segments, duplicate separators or Windows drive/stream syntax.
-    if (len(parts) != 2 or parts[0] != "captures"
-            or not parts[1] or parts[1] in {".", ".."}
-            or "\\" in image or ":" in image
-            or any(ord(character) < 32 for character in image)
-            or Path(parts[1]).suffix.lower() != ".png"):
-        raise StorageError(f"Étape {step['index']} : image hors du dossier captures/ refusée.")
+    parts = _capture_parts(step)
     # Resolving *both* captures/ and the image and comparing only their parents
     # would accept a captures/ symlink/junction pointing outside the session.
     # Anchor it to the real session, and reject even links to another capture.

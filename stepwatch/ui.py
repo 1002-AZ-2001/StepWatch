@@ -10,14 +10,14 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, ttk
+from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
 from .engine import Recorder
 from .models import CaptureConfig, CaptureTarget, Rect
 from .platform import WindowsBackend
-from .storage import SessionStore, export_standalone, import_sharex
+from .storage import SessionStore, export_markdown, export_standalone, import_sharex
 
 LOGGER = logging.getLogger(__name__)
 
@@ -242,7 +242,9 @@ class StepWatchApp:
         self.resume_button = ttk.Button(actions, text="Reprendre", command=self._resume, state="disabled")
         self.resume_button.pack(side="left", padx=(0, 6))
         self.stop_button = ttk.Button(actions, text="Arrêter", command=self._stop, state="disabled")
-        self.stop_button.pack(side="left")
+        self.stop_button.pack(side="left", padx=(0, 6))
+        self.note_button = ttk.Button(actions, text="Ajouter une note", command=self._add_note, state="disabled")
+        self.note_button.pack(side="left")
 
         counts = ttk.Frame(right, style="Card.TFrame", padding=(16, 8))
         counts.grid(row=1, column=0, sticky="ew", pady=(0, 12))
@@ -450,6 +452,22 @@ class StepWatchApp:
             self._recorder.stop(timeout=0)
         self._update_controls()
 
+    def _add_note(self) -> None:
+        """Note libre du technicien, ajoutée à la dernière étape conservée."""
+        if self._recorder is None or self._recorder.state not in {"recording", "paused"}:
+            return
+        text = simpledialog.askstring(
+            "Ajouter une note",
+            "Note pour la dernière étape (aucune frappe n’est enregistrée hors de ce champ) :",
+            parent=self.root,
+        )
+        if not text or not text.strip():
+            return
+        try:
+            self._recorder.add_note(text)
+        except Exception as exc:
+            self._write_log(f"Note non ajoutée : {exc}")
+
     def _background_running(self) -> bool:
         return any(thread is not None and thread.is_alive()
                    for thread in (self._import_thread, self._export_thread))
@@ -462,6 +480,7 @@ class StepWatchApp:
         self.pause_button.configure(state="normal" if state == "recording" and not self._closing else "disabled")
         self.resume_button.configure(state="normal" if state == "paused" and not self._closing else "disabled")
         self.stop_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
+        self.note_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
         self.import_button.configure(state="disabled" if active or busy else "normal")
         exportable = self._session_dir is not None and not active and not busy
         self.export_button.configure(state="normal" if exportable else "disabled")
@@ -517,6 +536,8 @@ class StepWatchApp:
             size = event["size"] / 1_000_000
             self._write_log(f"Rapport autonome : {event['path']} ({size:.1f} Mo). Il contient "
                             "toutes les captures : protégez-le comme le dossier de l’intervention.")
+            if event.get("markdown"):
+                self._write_log(f"Rapport Markdown : {event['markdown']} (liens vers captures/).")
         elif event["type"] == "error":
             self._write_log(event["message"], level=logging.WARNING)
             if not self._closing:
@@ -608,8 +629,10 @@ class StepWatchApp:
                 if store is not None:
                     store.close()
                 path = export_standalone(directory)
+                markdown = export_markdown(directory)
                 self._background_events.put({"type": "export_done", "path": str(path),
-                                             "size": path.stat().st_size})
+                                             "size": path.stat().st_size,
+                                             "markdown": str(markdown)})
             except Exception as exc:
                 self._background_events.put({"type": "error", "title": "Export impossible",
                                              "message": f"Export du rapport autonome interrompu : {exc}"})
