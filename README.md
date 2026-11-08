@@ -215,3 +215,223 @@ Les liens symboliques sortant du bundle sont refusés. Le paquet déclare un min
 - `diagnostics.py` : journal de diagnostic local en rotation et capture des exceptions non gérées.
 
 Tkinter est fourni avec Python sous Windows et évite d'ajouter un framework lourd à ce dépôt initialement vide. Les dépendances de capture sont Pillow, `mss` et `pynput` (sur Windows). Aucun service réseau, serveur ou compte externe n'est nécessaire pour enregistrer.
+
+---
+
+# StepWatch (English)
+
+StepWatch documents an IT support session using the pixels visible on the technician's Windows workstation. Screenshots and reports remain on that workstation. No agent is installed on the client's computer.
+
+Current version: **0.2.0**, with unpublished changes described in the [changelog](CHANGELOG.md). The project history is available in [docs/HISTORIQUE.md](docs/HISTORIQUE.md), and planned developments are listed in [docs/FEUILLE_DE_ROUTE.md](docs/FEUILLE_DE_ROUTE.md).
+
+Microsoft has deprecated the Windows Steps Recorder (`psr.exe`). StepWatch is a local, telemetry-free alternative designed for remote support sessions.
+
+## Download pre-built applications
+
+The GitHub Actions workflow [Windows / Debian tests and packages](https://github.com/1002-AZ-2001/StepWatch/actions/workflows/build.yml) builds the Windows and Linux distributions on their respective operating systems. It runs on pushes to `main`, pull requests targeting `main`, `v*` tags, and manual requests: in **Actions**, select the workflow and then **Run workflow**.
+
+Once the run has completed successfully, open its summary and the **Artifacts** section, then download the Windows or Linux archive. GitHub may require you to sign in to download an artifact. Extract the downloaded archive to access the distributable files:
+
+- **`stepwatch-windows-x64`**: `StepWatch-0.2.0-windows-x64.exe` (a standalone single file), `StepWatch-0.2.0-windows-x64-portable.zip`, and `SHA256SUMS-windows.txt`. The portable archive contains `StepWatch.exe` and its dependencies: extract it and keep the entire folder. Python is not required on the end user's workstation.
+- **`stepwatch-linux-amd64`**: `stepwatch_0.2.0_amd64.deb` and `SHA256SUMS-linux.txt`, with Python and the application dependencies bundled. The package targets Ubuntu 22.04 or later and Debian 12 or later, on the amd64 architecture with a graphical session.
+
+To verify a download, run the following command from the directory containing the files and the corresponding `SHA256SUMS-*` file:
+
+```bash
+sha256sum -c SHA256SUMS-linux.txt
+```
+
+In Windows PowerShell, compare the output of `Get-FileHash .\StepWatch-0.2.0-windows-x64.exe` (SHA256 is the default) with the corresponding line in `SHA256SUMS-windows.txt`. The executables are not signed yet, so SmartScreen may display a warning.
+
+Artifacts are retained for 30 days; files published in a Release follow that Release's lifecycle. The `SHA256SUMS-*` files can be used to verify download integrity.
+
+**On Linux, only ShareX import and reports are available. The interface prevents recording: hooks and window capture are Windows-only features.**
+
+To install the package, run the following commands from the directory where the `.deb` file was extracted:
+
+```bash
+sudo apt install ./stepwatch_0.2.0_amd64.deb
+stepwatch
+```
+
+A StepWatch shortcut is also added to the applications menu. The package installs the application in `/opt/stepwatch`; sessions and logs remain in the user's directories. The X11 and font system libraries are installed by `apt` if needed. A package built locally on a newer distribution may require a newer glibc version than the one produced by CI.
+
+A tag that exactly matches the version in `pyproject.toml`, for example `v0.2.0`, also publishes the files in **[Releases](https://github.com/1002-AZ-2001/StepWatch/releases)** once the build succeeds. The tag and version must be updated together. Other workflow runs provide CI artifacts. The presence of the workflow in the repository does not prove that a run or publication has succeeded: check its status on GitHub.
+
+## Install and launch on Windows
+
+Requirements: Windows 10/11, Python 3.11 or later (3.12 recommended), and the official installation including Tcl/Tk and pip. An Internet connection is required to install dependencies; the application then runs locally. Run these commands in PowerShell from the repository directory:
+
+```powershell
+.\scripts\install.ps1
+.\scripts\launch.ps1
+```
+
+The installation creates `.venv`, installs the versions pinned in `requirements.txt`, and checks their dependencies. It can be run again. To select a specific interpreter:
+
+```powershell
+.\scripts\install.ps1 -Python "C:\Python312\python.exe"
+```
+
+When `-Python` is not specified, the script tries the `py` launcher in this order: 3.12, 3.13, then 3.11, followed by the `python` command. It checks the Python version and whether Tcl/Tk can be imported before creating `.venv`. An existing non-compliant environment is reported but is not automatically deleted. Other versions can be selected explicitly, but full dependency compatibility with Python 3.14 or later has not been established. The PowerShell scripts still need to be run and validated on Windows PowerShell 5.1 and PowerShell 7.
+
+If the PowerShell execution policy blocks scripts, use the Python commands below or a process-scoped authorization, in accordance with your organization's policy. No script changes the machine's security policy.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m stepwatch
+```
+
+## Record a support session
+
+1. Enter a name and choose the destination folder.
+2. Select an open window, a monitor, or a custom rectangle. **Refresh** (`Actualiser`) reloads the list of windows and displays. Screen coordinates use physical pixels; a monitor positioned to the left may have a negative origin.
+3. Choose a mode: **Hybrid** (`Hybride`, local clicks and visual changes), **Clicks only** (`Clics uniquement`), or **Visual changes only** (`Changements visuels uniquement`).
+4. Set the post-click delay, comparison interval, and sensitivity. The threshold represents the proportion of changed pixels: a lower value retains more steps. Conservative mode prioritizes retaining small changes.
+5. Define sensitive-area masks if needed, then click **Start** (`Démarrer`). Nothing is recorded automatically when the application launches.
+6. Use **Pause**, **Resume** (`Reprendre`), and **Stop** (`Arrêter`). The preview, counters, and log show retained screenshots, skipped comparisons, and errors.
+7. **Add note** (`Ajouter une note`), during recording or while paused, adds free text to the last retained step: “Note: …” appears in `steps.json` and in the reports. This is the only text input that is retained; no keyboard keystrokes are otherwise recorded. A note entered before the first screenshot is rejected and reported in the log.
+
+A double-click (or triple-click) using the same button at the same location within Windows' double-click time is recorded as a single “Local double-click” step, captured after the final press. Subsequent presses must occur before the first press is captured, i.e. within the post-click delay (0.35 seconds by default). `steps.json` records the number of presses in `click_count`.
+
+In **Clicks only** mode, the first screenshot waits for a local click: no reference image is saved at startup. Hybrid and visual modes may retain an initial image to establish the beginning of the session.
+
+Masks are rectangles in the format `x,y,width,height`, one per line, relative to the top-left corner of the capture. They are applied before comparison and storage. They remain fixed relative to the capture, so check their position if the window layout or size changes. They do not automatically detect passwords. Do not open sensitive data outside masked areas during a session.
+
+For AnyDesk, TeamViewer, or RDP, select the local window of the remote-support application. A visible action performed by the remote client is labelled **visual change detected**: StepWatch cannot know where the remote user clicked. Markers represent only local clicks captured by the mouse hook. No keyboard keystrokes are recorded.
+
+## Screenshots and reports
+
+Each session gets a unique folder containing PNG screenshots in `captures/`, steps in `steps.json`, the report in `rapport.html`, and, when recording stops, its Markdown version `rapport.md` (for a wiki, a GitLab/GitHub issue, or a knowledge base; relative links to `captures/` are preserved). Open `rapport.html` in a browser; no server or Internet access is required. Keep the `captures/` folder next to the HTML file so its relative links remain valid. `steps.json` stores timestamps in UTC; HTML reports display them in the workstation's local time, including the offset from UTC.
+
+To create a PDF, open `rapport.html` in a browser and select **Print → Save as PDF**: a print stylesheet prevents steps from being split across pages.
+
+**Standalone report** (next to **Open folder** / `Ouvrir le dossier`) writes `rapport-autonome.html` to the session folder and regenerates `rapport.md` (useful for an imported or older session): it produces a single file with embedded screenshots that can be attached to a ticket or shared without the `captures/` folder. Only PNG images from that session's `captures/` folder are embedded. This file contains every screenshot: protect it in the same way as the folder itself. It is larger than the combined PNG files (Base64 encoding adds approximately 33%).
+
+**ShareX** import reads images from the selected folder (without scanning subfolders), sorts them by modification date and then by name, and copies them into a new session. Source files are never deleted or modified. The modification date is not always the capture date: check the order after a transfer that changed these dates. If an image cannot be read, the import reports the error and keeps any images already copied to the specified output folder. Capture masks are not applied to this import: make sure beforehand that the ShareX images can be exported as-is.
+
+Screenshots may contain confidential data. Choose an appropriate folder and manage its protection, backup, and retention period yourself. StepWatch does not send screenshots over the Internet and does not add telemetry; however, a synchronized folder (OneDrive, a network share backed up to the cloud, etc.) would send the screenshots off the workstation.
+
+If an antivirus, indexer, or synchronization tool briefly locks a file, the write is retried. If `steps.json` or `rapport.html` still cannot be rewritten, the PNG screenshot is kept, the log reports the issue, and recording continues: another write is attempted at the next screenshot and when recording stops. If the lock remains until the application closes, reports may be incomplete even though the PNG files are present; keep the folder and log to recover the screenshots and reconstruct missing steps. The program cannot guarantee recovery of metadata that was not written before the process ended.
+
+## Diagnostic log
+
+StepWatch keeps a local support log: `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` on Windows (`~/.local/state/stepwatch/` elsewhere), rotated across up to 4 files of 1 MB each. The path is displayed at startup in the interface log. It includes messages from this log (except skipped comparisons, which are too frequent) and adds stack traces for errors, including errors from interface callbacks and threads that would otherwise be lost in the executable without a console. `crash.log`, in the same directory, collects native crashes.
+
+This log contains neither images nor keyboard input, but it may contain session names, window titles, and folder paths. It stays on the workstation; review it before sharing it.
+
+Rotation applies to `stepwatch.log` and its three backups; `crash.log` is a separate file to which information is appended for each native crash. When the interface falls behind, it keeps only one pending preview: PNG files and messages for every step are retained.
+
+## Windows capture limitations
+
+- Windows silently removes a low-level mouse hook that takes too long (`LowLevelHooksTimeout`). StepWatch monitors the physical state of the buttons: if a press is not reported by the hook within one second, the hook is reinstalled and the log reports that “some clicks may have been missed”. Check the most recent steps in that case. Presses on an elevated (administrator) window may also trigger this reinstallation, with an increasing delay of up to 30 seconds.
+- Capture uses the visible desktop pixels. Keep the selected window visible and unobstructed: an overlapping window may appear in the image. Window tracking recalculates its position and size.
+- A local click is associated with the selected window only if it falls within its area, either on the window itself or on a window it owns (dialog box, error message). A click on another overlapping window is ignored.
+- A closed, minimized, or invisible window produces an explicit error. Check the log and select a valid target before resuming a session.
+- The UAC secure desktop, some protected content, elevated windows, and session changes may prevent capture or click reception. Do not assume that these screens have been documented.
+- Visual comparison reduces minor variations and isolated movements, but cannot guarantee that all animations are eliminated or that every very small change is retained. Adjust the threshold and interval for your session.
+- Conservative mode increases sensitivity and may retain more screenshots. A change that lasts less than the comparison interval may not be detected.
+- Stopping waits for ongoing operations to finish so that files can be finalized and hooks released. A blocked native call may delay shutdown: a Python thread cannot be forcibly interrupted without risking resources and file writes. Forcibly terminating the process may leave a report incomplete.
+
+## Automated tests
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Tests cover `mss` rectangles and formats, simulated windows, comparisons, triggers, resource lifecycles, reports, and preservation of imported images. They can also be run on Linux to validate system-independent logic:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+GUI tests are optional and skipped by default. With Tcl/Tk and an X test server already running (for example, `Xorg` or `Xvfb` on `:99`), enable them as follows:
+
+```bash
+DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+These tests use a real Tk interface and simulate the Windows backend; they do not validate Windows hooks. `test_live_capture.py` also checks an actual MSS capture of a test window on the Linux display, its masking, and its PNG/JSON/HTML export.
+
+Code style is checked with `ruff` (rules are declared in `pyproject.toml`):
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/ruff check stepwatch tests scripts
+```
+
+CI runs linting and all tests, including Tk interface tests, on Linux (Ubuntu 22.04 with Xvfb) and Windows, then builds and tests the packages. Dependabot proposes monthly updates for pinned dependencies and GitHub Actions.
+
+Check the runner summary: GUI tests skipped because no display is available do not count as successful. Also run `.venv/bin/python -m pip check` on Linux, or `.\.venv\Scripts\python.exe -m pip check` on Windows. The number of tests changes as the code evolves; use the results of your own run to validate the installed version.
+
+Tests using mocks do not validate APIs, hooks, or captures on a real Windows system. Recording requires Windows and an interactive graphical session. Tests run only in the Linux development environment do not demonstrate that a real Windows capture or Windows build has been performed.
+
+### Manual validation on Windows
+
+Before distributing the application:
+
+1. Launch it and verify that no capture starts before clicking **Start** (`Démarrer`).
+2. Record a Notepad window: left/right clicks, double-click, moving, resizing, pause, and resume. Check markers, counters, and step order.
+3. During a recording, add a note and verify that it appears in `rapport.html` and `rapport.md`.
+4. Minimize and then close the target; verify that errors are visible and that there is no crash or silent loss of captures.
+5. Test every monitor, negative origins, and several DPI scaling settings. Check click and mask coordinates.
+6. Test a remote change in AnyDesk, TeamViewer, or RDP without a local click: it must remain labelled as a visual change.
+7. Test a masked area: no sensitive pixel should appear in PNG files, the preview, or the report. Check again after resizing.
+8. Stop and restart a session, then close the application while recording. Check the report, hook release, and that no capture occurs after stopping.
+9. Import ShareX images, open the report offline, and compare the source files before and after.
+
+## Build a Windows executable
+
+Build on Windows, using the same architecture as the target workstations:
+
+```powershell
+.\scripts\install.ps1
+.\scripts\build.ps1
+```
+
+The script installs `requirements-dev.txt`, runs the tests, and then invokes PyInstaller. It explicitly bundles `scripts/StepWatch.manifest` to declare per-monitor DPI awareness (`PerMonitorV2`, then `PerMonitor`) as soon as the executable starts, before Python and Tk are initialized. The result is located at `dist\StepWatch\StepWatch.exe`. Distribute the **entire** `dist\StepWatch` folder, not just the `.exe` file. Python is not required on the destination workstation for this distribution.
+
+To also build the single-file executable used by CI:
+
+```powershell
+.\scripts\build.ps1 -SingleFile
+```
+
+This mode keeps the portable distribution and adds `dist\StepWatch-singlefile.exe`. When launched, the single-file executable extracts its environment to a temporary directory; its first startup may take longer.
+
+This method creates a portable application; it does not provide an MSI installer, code signing, or antivirus validation. Test the result on a separate Windows workstation. PyInstaller cannot produce a Windows `.exe` from Linux.
+
+## Build the Linux package
+
+Use Ubuntu 22.04 amd64 to match the baseline CI compatibility. Build requirements: Python 3.11 or later with Tkinter, `dpkg-deb`, and the dependencies in `requirements-dev.txt`. In an environment where Python 3.12 is already available:
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python scripts/build_deb.py
+```
+
+The script uses PyInstaller and then creates `dist/stepwatch_0.2.0_amd64.deb` without root privileges. Installed files have the appropriate permissions and are owned by root in the archive. No maintainer scripts that run during installation are added.
+
+To reuse a `StepWatch` folder already created by PyInstaller on the same build system:
+
+```bash
+.venv/bin/python scripts/build_deb.py --bundle dist/StepWatch --output dist
+```
+
+Symbolic links that point outside the bundle are rejected. The package declares a minimum glibc version equal to the greater of 2.35 and the build system's version. Reusing a bundle from a newer system would invalidate this estimate: rebuild it on the target build system. Running tests on Linux does not validate Windows capture.
+
+## Architecture
+
+- `models.py`: targets, rectangles, and validated settings.
+- `platform.py`: Windows enumeration and capture, monitor handling, and DPI management.
+- `imaging.py`: masking, markers, and image comparison.
+- `engine.py`: capture in a thread, triggers, and events sent to the interface.
+- `storage.py`: images, JSON, offline HTML and Markdown reports, notes, and ShareX import.
+- `ui.py`: Tkinter/ttk interface in French; the engine prepares thumbnails before Tk displays them.
+- `diagnostics.py`: rotating local diagnostic log and capture of unhandled exceptions.
+
+Tkinter is included with Python on Windows and avoids adding a heavy framework to this initially empty repository. Capture dependencies are Pillow, `mss`, and `pynput` (on Windows). No network service, server, or external account is required to record a session.
