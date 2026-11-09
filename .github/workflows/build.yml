@@ -271,7 +271,7 @@ jobs:
         run: |
           set -euo pipefail
           ls -l release-assets
-          title="StepWatch $RELEASE_TAG — Windows et Debian"
+          title="StepWatch $RELEASE_TAG — Windows, Debian et Arch Linux"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             # Only reachable from a tag push: refresh that version's files.
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
