@@ -45,10 +45,11 @@ def release_notes(project: Path = ROOT) -> tuple[str, str]:
 | --- | --- |
 | `StepWatch-{version}-windows-x64.exe` | Windows 10/11 x64, un seul fichier, sans installation de Python. |
 | `StepWatch-{version}-windows-x64-portable.zip` | Windows, dossier portable : extraire et conserver le dossier entier. |
-| `stepwatch_{version}_amd64.deb` | Ubuntu 22.04+ / Debian 12+ amd64 : import ShareX et rapports uniquement. |
+| `stepwatch_{version}_amd64.deb` | Debian 12+ / Ubuntu 22.04+ amd64, X11 ou Wayland (XWayland) : import ShareX et rapports. |
+| `stepwatch-{version}-1-x86_64.pkg.tar.zst` | Arch Linux x86_64, X11 ou Wayland (XWayland) : import ShareX et rapports. |
 | `SHA256SUMS-windows.txt`, `SHA256SUMS-linux.txt` | Sommes de contrôle des fichiers ci-dessus. |
 
-Vérifier un téléchargement : `sha256sum -c SHA256SUMS-linux.txt --ignore-missing`, ou `Get-FileHash` sous PowerShell. Les exécutables Windows ne sont pas signés : SmartScreen peut afficher un avertissement.
+Vérifier un téléchargement : `sha256sum -c SHA256SUMS-linux.txt --ignore-missing`, ou `Get-FileHash` sous PowerShell. Sous Linux, l'enregistrement n'est pas disponible ; `stepwatch --self-test` vérifie l'installation. Les exécutables Windows ne sont pas signés : SmartScreen peut afficher un avertissement.
 
 Installation et vérifications : [guide de distribution]({REPOSITORY}/blob/v{version}/docs/distribution.md) · [validation]({REPOSITORY}/blob/v{version}/docs/validation.md) · [journal complet]({REPOSITORY}/blob/v{version}/CHANGELOG.md).
 """

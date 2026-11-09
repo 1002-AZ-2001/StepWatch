@@ -25,8 +25,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "packaging" / "linux"
 DEPENDENCIES = (
-    "libx11-6, libxext6, libxrender1, libxss1, libxcb1, "
+    "libx11-6, libxext6, libxrender1, libxss1, libxft2, libxcb1, "
     "libfontconfig1, libfreetype6, libexpat1, zlib1g"
+)
+
+#: X11 and font libraries that PyInstaller copies from the build host. They
+#: must come from the target system instead: a fontconfig built on Ubuntu
+#: 22.04 cannot parse the configuration files of a newer distribution (Arch
+#: Linux), and Tk then fails with "failed to allocate font". The packages
+#: declare these libraries as dependencies. Libraries vendored by wheels
+#: carry a hash in their name (libfreetype-57f805ba.so.6) and are kept.
+SYSTEM_LIBRARY = re.compile(
+    r"lib(X11|Xau|Xdmcp|Xext|Xfixes|Xft|Xrandr|Xrender|Xss|xcb(-[a-z]+)?|fontconfig|freetype"
+    r"|expat|png16|brotli(common|dec|enc)|bsd|md)\.so(\.[0-9]+)*"
 )
 
 
@@ -128,15 +139,21 @@ def _normalize_permissions(root: Path) -> None:
             path.chmod(0o755 if path.is_dir() or mode & 0o111 else 0o644)
 
 
-def stage_package(bundle: Path, staging: Path, version: str) -> None:
-    """Populate a new package root. Public for archive-layout regression tests."""
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-        raise PackagingError("Version Debian invalide.")
+def stage_files(bundle: Path, staging: Path) -> None:
+    """Installed tree shared by the Debian and Arch Linux packages.
+
+    /opt/stepwatch (PyInstaller onedir), /usr/bin/stepwatch, desktop entry and
+    icon, with normalised permissions. No package-manager metadata.
+    """
     validate_bundle(bundle)
     staging.mkdir()
     payload = staging / "opt" / "stepwatch"
     payload.parent.mkdir(parents=True)
     shutil.copytree(bundle, payload, symlinks=True)
+    for directory, _, filenames in os.walk(payload, followlinks=False):
+        for name in filenames:
+            if SYSTEM_LIBRARY.fullmatch(name):
+                (Path(directory) / name).unlink()
     assets = {
         "stepwatch": "usr/bin/stepwatch",
         "stepwatch.desktop": "usr/share/applications/stepwatch.desktop",
@@ -147,6 +164,14 @@ def stage_package(bundle: Path, staging: Path, version: str) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ASSETS / source, target)
     (staging / "usr/bin/stepwatch").chmod(0o755)
+    _normalize_permissions(staging)
+
+
+def stage_package(bundle: Path, staging: Path, version: str) -> None:
+    """Populate a new package root. Public for archive-layout regression tests."""
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise PackagingError("Version Debian invalide.")
+    stage_files(bundle, staging)
     installed_size = (sum(path.stat().st_size for path in staging.rglob("*")
                           if path.is_file() and not path.is_symlink()) + 1023) // 1024
     control = staging / "DEBIAN" / "control"
@@ -157,16 +182,34 @@ def stage_package(bundle: Path, staging: Path, version: str) -> None:
         "Maintainer: StepWatch project <1002-AZ-2001@users.noreply.github.com>\n"
         "Homepage: https://github.com/1002-AZ-2001/StepWatch\n"
         f"Installed-Size: {installed_size}\nDepends: libc6 (>= {minimum_glibc()}), {DEPENDENCIES}\n"
+        "Suggests: xwayland\n"
         "Description: Local ShareX imports and offline intervention reports\n"
         " French desktop interface with local PNG, JSON and HTML reports.\n"
         " Linux supports imports and reports only; recording requires Windows.\n"
+        " Runs in X11 sessions and in Wayland sessions through XWayland.\n"
         " Python and application dependencies are bundled. No server is required.\n",
         encoding="utf-8",
     )
     _normalize_permissions(staging)
 
 
-def build_package(bundle: Path | None = None, output: Path = ROOT / "dist") -> Path:
+def freeze(work: Path) -> Path:
+    """PyInstaller onedir bundle of StepWatch in ``work``; returns its folder."""
+    build_environment = os.environ.copy()
+    build_environment["PYINSTALLER_CONFIG_DIR"] = str(work / "pyinstaller-cache")
+    subprocess.run(
+        [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
+         "--name", "StepWatch", "--paths", str(ROOT),
+         "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
+         "--specpath", str(work), *native_tcl_binaries(),
+         str(ROOT / "stepwatch" / "__main__.py")],
+        cwd=ROOT, check=True, env=build_environment,
+    )
+    return work / "dist" / "StepWatch"
+
+
+def build_package(bundle: Path | None = None, output: Path = ROOT / "dist",
+                  keep_bundle: Path | None = None) -> Path:
     if sys.platform != "linux":
         raise PackagingError("La création du paquet .deb nécessite Linux.")
     for command in ("dpkg", "dpkg-deb"):
@@ -181,19 +224,15 @@ def build_package(bundle: Path | None = None, output: Path = ROOT / "dist") -> P
     with tempfile.TemporaryDirectory(prefix="stepwatch-deb-") as temporary:
         work = Path(temporary)
         if bundle is None:
-            build_environment = os.environ.copy()
-            build_environment["PYINSTALLER_CONFIG_DIR"] = str(work / "pyinstaller-cache")
-            subprocess.run(
-                [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
-                 "--name", "StepWatch", "--paths", str(ROOT),
-                 "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
-                 "--specpath", str(work), *native_tcl_binaries(),
-                 str(ROOT / "stepwatch" / "__main__.py")],
-                cwd=ROOT, check=True, env=build_environment,
-            )
-            bundle = work / "dist" / "StepWatch"
+            bundle = freeze(work)
         else:
             bundle = bundle.expanduser().resolve(strict=True)
+        if keep_bundle is not None:
+            # Reused by scripts/build_arch.py: one frozen bundle, two packages.
+            keep_bundle = keep_bundle.expanduser().resolve()
+            if keep_bundle.exists():
+                raise PackagingError(f"Dossier déjà présent, non remplacé : {keep_bundle}")
+            shutil.copytree(bundle, keep_bundle, symlinks=True)
         staging = work / "root"
         stage_package(bundle, staging, version)
         filename = f"stepwatch_{version}_amd64.deb"
@@ -217,9 +256,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, help="réutiliser un dossier PyInstaller StepWatch existant")
     parser.add_argument("--output", type=Path, default=ROOT / "dist", help="dossier des paquets .deb générés")
+    parser.add_argument("--keep-bundle", type=Path,
+                        help="copier aussi le dossier PyInstaller ici (pour le paquet Arch Linux)")
     arguments = parser.parse_args(argv)
     try:
-        package = build_package(arguments.bundle, arguments.output)
+        package = build_package(arguments.bundle, arguments.output, arguments.keep_bundle)
     except (PackagingError, OSError, subprocess.CalledProcessError, KeyError, tomllib.TOMLDecodeError) as exc:
         parser.exit(1, f"Échec de création du paquet : {exc}\n")
     print(f"Paquet créé : {package}")

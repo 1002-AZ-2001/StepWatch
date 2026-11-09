@@ -4,6 +4,17 @@
 
 Rien pour l'instant.
 
+## 0.4.0 — 2026-11-09
+
+Linux : paquet Arch Linux, Debian 12 vérifié, et fonctionnement sous Wayland. Sous Linux, StepWatch propose toujours l'import ShareX et les rapports ; l'enregistrement reste réservé à Windows.
+
+- **Paquet Arch Linux** `stepwatch-VERSION-1-x86_64.pkg.tar.zst`, construit par `makepkg` sans privilèges dans un conteneur Arch officiel (`scripts/build_arch.py` prépare le PKGBUILD). La CI l'installe, le teste sous X11 et sous Wayland, puis le retire. Il est publié dans les Releases avec sa somme SHA-256.
+- **Debian 12** : la CI installe le `.deb` dans un conteneur `debian:12-slim`, exécute l'auto-test de l'interface, puis retire le paquet.
+- **Wayland** : Tk n'a pas de backend Wayland natif et s'affiche par XWayland. StepWatch le vérifie dans un vrai compositeur (weston en mode headless, avec XWayland) sous Ubuntu 22.04 et Arch Linux. Sans XWayland, un message explique quel paquet installer (`xwayland` ou `xorg-xwayland`), au lieu d'une erreur Tk ; le code de sortie est 2. Les paquets le suggèrent (`Suggests` Debian, `optdepends` Arch).
+- **Icône dans les docks** : la fenêtre déclare la classe X11 `Stepwatch` (au lieu de `Tk`), et l'entrée de menu déclare `StartupWMClass=Stepwatch` : GNOME, KDE et les autres bureaux associent la fenêtre à l'icône StepWatch, y compris sous XWayland.
+- **Polices sous Arch Linux** : les paquets n'embarquent plus les bibliothèques X11 et de polices du système de compilation (fontconfig, freetype, Xft, X11…). Le fontconfig d'Ubuntu 22.04 ne savait pas lire la configuration d'Arch, et Tk s'arrêtait sur « failed to allocate font ». Ces bibliothèques viennent désormais du système cible ; elles sont déclarées en dépendances (`libxft2`/`libxft` ajoutées), ainsi qu'une police (`ttf-font`) pour Arch.
+- **`stepwatch --self-test`** vérifie une installation sur une session synthétique : images, masques, rapports HTML et Markdown, note, rapport autonome, import ShareX, puis ouverture et fermeture de la vraie fenêtre si un affichage est disponible. `stepwatch --version` affiche la version.
+
 ## 0.3.0 — 2026-11-09
 
 Première version publiée dans les Releases GitHub, pour Windows (exécutable unique et archive portable) et Linux (paquet `.deb`). Comme pour la 0.2.0, les hooks, la capture et les exécutables Windows sont vérifiés par la CI Windows, mais restent à valider sur un poste réel.

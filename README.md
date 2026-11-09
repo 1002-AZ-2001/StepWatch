@@ -4,7 +4,7 @@
 
 StepWatch documente une intervention informatique étape par étape, à partir des pixels visibles sur le poste Windows du technicien. Chaque clic local ou changement visuel devient une capture annotée. Le rapport HTML se consulte hors ligne. Captures et rapports restent sur le poste : aucun agent n'est installé chez le client, et rien n'est envoyé sur Internet.
 
-La version **0.3** utilise Python, Tkinter, Pillow, `mss` et `pynput`. Aucune frappe clavier n'est enregistrée. Les zones sensibles peuvent être masquées avant l'écriture des images. Microsoft a déprécié l'Enregistreur d'actions de Windows (`psr.exe`) : StepWatch en est une alternative locale, pensée pour la télémaintenance.
+La version **0.4** utilise Python, Tkinter, Pillow, `mss` et `pynput`. Aucune frappe clavier n'est enregistrée. Les zones sensibles peuvent être masquées avant l'écriture des images. Microsoft a déprécié l'Enregistreur d'actions de Windows (`psr.exe`) : StepWatch en est une alternative locale, pensée pour la télémaintenance.
 
 ![Interface de StepWatch sous Linux après l'import de captures synthétiques](docs/stepwatch.png)
 
@@ -16,7 +16,8 @@ Les exécutables sont dans les [Releases](https://github.com/1002-AZ-2001/StepWa
 | --- | --- |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 : un seul fichier, sans installation. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows : dossier portable, à extraire en entier. |
-| `stepwatch_VERSION_amd64.deb` | Ubuntu 22.04+ et Debian 12+ : import ShareX et rapports uniquement. |
+| `stepwatch_VERSION_amd64.deb` | Debian 12+ et Ubuntu 22.04+ : import ShareX et rapports uniquement. |
+| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux : import ShareX et rapports uniquement. |
 | `SHA256SUMS-*.txt` | Vérification des téléchargements. |
 
 Python est inclus. Les exécutables Windows ne sont pas encore signés : SmartScreen peut afficher un avertissement, donc vérifiez d'abord le SHA-256. Les commandes d'installation et de vérification, ainsi que la construction depuis les sources, sont dans le [guide de distribution](docs/distribution.md).
@@ -24,10 +25,14 @@ Python est inclus. Les exécutables Windows ne sont pas encore signés : SmartSc
 ```bash
 # Debian ou Ubuntu, après téléchargement du .deb
 sudo apt install ./stepwatch_VERSION_amd64.deb
+# Arch Linux, après téléchargement du paquet
+sudo pacman -U ./stepwatch-VERSION-1-x86_64.pkg.tar.zst
+# Lancer, ou vérifier l'installation sans données personnelles
 stepwatch
+stepwatch --self-test
 ```
 
-**L'enregistrement nécessite Windows.** Sous Linux, l'interface propose seulement l'import ShareX et les rapports.
+**L'enregistrement nécessite Windows.** Sous Linux, l'interface propose seulement l'import ShareX et les rapports, en session X11 comme en session **Wayland**. Sous Wayland, StepWatch s'affiche par XWayland, présent par défaut sur la plupart des bureaux : voir le [guide de distribution](docs/distribution.md#wayland).
 
 ### Depuis les sources, sous Windows
 
@@ -97,7 +102,7 @@ Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/
 - [Architecture](docs/architecture.md) : modules, threads et garanties.
 - [Validation](docs/validation.md) : tests automatisés, CI, liste de vérification sur Windows réel et mesures.
 - [Distribution](docs/distribution.md) : construction des exécutables et publication d'une nouvelle version (une Release par version).
-- [Feuille de route](docs/FEUILLE_DE_ROUTE.md) : versions 0.4 (rapports prêts à partager), 0.5 (capture plus fiable) et 1.0 (diffusion).
+- [Feuille de route](docs/FEUILLE_DE_ROUTE.md) : versions 0.5 (rapports prêts à partager), 0.6 (capture plus fiable) et 1.0 (diffusion), et enregistrement sous Linux à étudier.
 - [Journal des modifications](CHANGELOG.md) et [historique du projet](docs/HISTORIQUE.md).
 
 ```bash

@@ -64,6 +64,10 @@ jobs:
           & .\.venv\Scripts\python.exe scripts/smoke_windows.py --executable dist/StepWatch/StepWatch.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          # Windowed build: no console; the self-test result is its exit code.
+          $selftest = Start-Process -FilePath dist/StepWatch/StepWatch.exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($selftest.ExitCode -ne 0) { throw "Auto-test de l'exécutable en échec ($($selftest.ExitCode))." }
+
       - name: Préparer les fichiers téléchargeables
         shell: pwsh
         env:
@@ -88,7 +92,7 @@ jobs:
           retention-days: 30
 
   linux:
-    name: Linux amd64 — lint, tests et paquet .deb
+    name: Linux amd64 — lint, tests, paquets Debian et Arch, X11 et Wayland
     # Oldest supported baseline: the package declares glibc >= 2.35.
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -136,19 +140,65 @@ jobs:
         run: .venv/bin/python -m unittest discover -s tests -v
 
       - name: Construire le paquet Debian
-        run: .venv/bin/python scripts/build_deb.py --output dist
+        run: .venv/bin/python scripts/build_deb.py --output dist --keep-bundle build/StepWatch
 
-      - name: Installer le paquet et vérifier le lancement
+      - name: Ubuntu 22.04 (X11) — installer le paquet, lancement et auto-test
         run: |
           sudo apt-get install -y -q ./dist/stepwatch_${{ steps.metadata.outputs.version }}_amd64.deb
           .venv/bin/python scripts/smoke_linux_bundle.py /opt/stepwatch/StepWatch
+          stepwatch --self-test | tee selftest.log
+          grep -q "Interface Tk : OK" selftest.log
+
+      - name: Ubuntu 22.04 (Wayland, weston + XWayland) — auto-test
+        run: |
+          sudo apt-get install -y -q weston xwayland
+          .venv/bin/python scripts/smoke_wayland.py /usr/bin/stepwatch
+
+      - name: Construire le paquet Arch Linux (makepkg non root)
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/build_arch.py --bundle build/StepWatch --output build/arch
+          docker run --rm -v "$PWD/build/arch:/build" -w /build archlinux:base-devel bash -euc '
+            useradd -m packager
+            chown -R packager:packager /build
+            runuser -u packager -- makepkg --noconfirm --nodeps
+          '
+          cp build/arch/stepwatch-*.pkg.tar.zst dist/
+
+      - name: Debian 12 — installer, auto-test et retirer le paquet
+        run: |
+          docker run --rm -v "$PWD/dist:/packages:ro" debian:12-slim bash -euc '
+            apt-get update -q
+            apt-get install -y -q --no-install-recommends /packages/stepwatch_*_amd64.deb xvfb
+            Xvfb :42 -screen 0 1280x800x24 >/dev/null 2>&1 &
+            sleep 2
+            DISPLAY=:42 stepwatch --self-test | tee /tmp/selftest.log
+            grep -q "Interface Tk : OK" /tmp/selftest.log
+            apt-get remove -y -q stepwatch
+            test ! -e /opt/stepwatch
+          '
+
+      - name: Arch Linux — installer, auto-test X11 et Wayland, retirer le paquet
+        run: |
+          # xvfb-run returns 1 in this container even for "true": start Xvfb directly.
+          docker run --rm -v "$PWD/dist:/packages:ro" -v "$PWD/scripts:/scripts:ro" archlinux:base bash -euc '
+            pacman -Syu --noconfirm --needed python weston xorg-xwayland xorg-server-xvfb
+            pacman -U --noconfirm /packages/stepwatch-*.pkg.tar.zst
+            Xvfb :42 -screen 0 1280x800x24 >/dev/null 2>&1 &
+            sleep 2
+            DISPLAY=:42 stepwatch --self-test | tee /tmp/selftest.log
+            grep -q "Interface Tk : OK" /tmp/selftest.log
+            python /scripts/smoke_wayland.py /usr/bin/stepwatch
+            pacman -R --noconfirm stepwatch
+            test ! -e /opt/stepwatch
+          '
 
       - name: Préparer les fichiers téléchargeables
         run: |
           set -euo pipefail
           mkdir artifacts
-          cp dist/*.deb artifacts/
-          (cd artifacts && sha256sum -- *.deb > SHA256SUMS-linux.txt && cat SHA256SUMS-linux.txt)
+          cp dist/*.deb dist/*.pkg.tar.zst artifacts/
+          (cd artifacts && sha256sum -- *.deb *.pkg.tar.zst > SHA256SUMS-linux.txt && cat SHA256SUMS-linux.txt)
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

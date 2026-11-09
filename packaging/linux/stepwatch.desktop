@@ -8,3 +8,4 @@ Icon=stepwatch
 Terminal=false
 Categories=Utility;
 Keywords=ShareX;documentation;reports;rapports;
+StartupWMClass=Stepwatch

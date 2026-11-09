@@ -13,6 +13,8 @@ StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en fra
 | `events.py` | File d'événements qui ne garde qu'un aperçu en attente, sans perdre les messages ni les erreurs. |
 | `storage.py` | PNG, `steps.json`, `rapport.html`, `rapport.md`, rapport autonome et import ShareX ; écritures atomiques réessayées sous Windows. |
 | `ui.py` | Fenêtre principale ; tous les appels Tk restent sur le thread principal. |
+| `display.py` | Type de session (X11, Wayland) et message explicite quand Tk ne peut pas s'afficher, par exemple sous Wayland sans XWayland ; classe de fenêtre `Stepwatch` pour les docks. |
+| `selftest.py` | `stepwatch --self-test` : session synthétique, rapports, import ShareX, puis ouverture et fermeture de la vraie fenêtre. Sans réseau ni données personnelles. |
 | `diagnostics.py` | Journal local en rotation et capture des exceptions non gérées (threads, rappels Tk, plantages natifs). |
 
 ## Threads et flux d'une capture

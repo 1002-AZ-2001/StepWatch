@@ -65,6 +65,21 @@ class DebianPackagingTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((stage / "opt/stepwatch/StepWatch").stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE((stage / "opt/stepwatch/_internal/library.so").stat().st_mode), 0o644)
 
+    def test_build_host_x11_and_font_libraries_are_left_to_the_target_system(self):
+        internal = self.bundle / "_internal"
+        system = ("libfontconfig.so.1", "libfreetype.so.6", "libX11.so.6", "libXft.so.2",
+                  "libxcb-shm.so.0", "libexpat.so.1", "libpng16.so.16", "libbrotlicommon.so.1")
+        kept = ("libfreetype-57f805ba.so.6.20.6", "libxcb-9065bb12.so.1.1.0", "libtk8.6.so",
+                "libpython3.12.so.1.0", "libstdc++.so.6")
+        for name in system + kept:
+            (internal / name).write_bytes(b"ELF placeholder")
+        stage = self.root / "stage"
+        packaging.stage_files(self.bundle, stage)
+        staged = {path.name for path in (stage / "opt/stepwatch/_internal").iterdir()}
+        self.assertFalse(staged & set(system))
+        self.assertTrue(set(kept) <= staged)
+        self.assertIn("libxft2", packaging.DEPENDENCIES)
+
     @unittest.skipUnless(os.name == "posix", "FIFO on POSIX")
     def test_rejects_special_files(self):
         os.mkfifo(self.bundle / "pipe")

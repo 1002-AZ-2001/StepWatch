@@ -6,7 +6,8 @@ Chaque version publiée se trouve dans les [Releases GitHub](https://github.com/
 | --- | --- |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, un seul fichier. Il extrait son environnement dans un dossier temporaire au lancement : le premier démarrage peut être plus lent. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows, dossier portable : extraire puis lancer `StepWatch\StepWatch.exe`. Conserver le dossier entier. |
-| `stepwatch_VERSION_amd64.deb` | Ubuntu 22.04+ ou Debian 12+, amd64, session graphique : import ShareX et rapports uniquement. |
+| `stepwatch_VERSION_amd64.deb` | Debian 12+ ou Ubuntu 22.04+, amd64 : import ShareX et rapports uniquement. |
+| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux x86_64 : import ShareX et rapports uniquement. |
 | `SHA256SUMS-windows.txt`, `SHA256SUMS-linux.txt` | Sommes SHA-256 des fichiers ci-dessus. |
 
 Python est inclus dans tous les fichiers. Aucun ne contient d'identifiant, de télémétrie ni de service réseau.
@@ -34,18 +35,42 @@ Les exécutables Windows **ne sont pas signés** : SmartScreen peut afficher « 
 
 Aucune installation n'est nécessaire. Les interventions sont enregistrées dans le dossier choisi dans l'interface, et le journal de diagnostic dans `%LOCALAPPDATA%\StepWatch\logs`. Pour retirer l'application, supprimez l'exécutable ou le dossier portable ; vos interventions ne sont pas supprimées.
 
-## Debian et Ubuntu
+## Linux : Debian, Ubuntu et Arch Linux
+
+**Sous Linux, seuls l'import ShareX et les rapports sont disponibles.** L'interface refuse l'enregistrement : les hooks et la capture de fenêtre sont réservés à Windows. Les deux paquets installent les mêmes fichiers : l'application dans `/opt/stepwatch`, la commande `stepwatch`, une entrée dans le menu et une icône. Les interventions et les journaux restent dans les dossiers de l'utilisateur.
+
+Après l'installation, `stepwatch --self-test` vérifie l'application sur une session synthétique et ouvre puis ferme la fenêtre ; il n'utilise aucune donnée personnelle.
+
+### Debian et Ubuntu
 
 ```bash
 sudo apt install ./stepwatch_VERSION_amd64.deb
 stepwatch
 ```
 
-L'application est installée dans `/opt/stepwatch`, avec la commande `stepwatch` et une entrée dans le menu des applications. Les interventions et les journaux restent dans les dossiers de l'utilisateur. Pour la retirer : `sudo apt remove stepwatch`.
-
-**Sous Linux, seuls l'import ShareX et les rapports sont disponibles.** L'interface refuse l'enregistrement : les hooks et la capture de fenêtre sont réservés à Windows.
+Pour la retirer : `sudo apt remove stepwatch`. La CI installe et teste le paquet sous Ubuntu 22.04 et dans un conteneur Debian 12.
 
 Le paquet déclare `libc6 (>= 2.35)`, ou la version de glibc du système de compilation si elle est plus récente. Il est construit sur Ubuntu 22.04 par la CI. Un paquet construit localement sur une distribution plus récente peut donc exiger une glibc plus récente : vérifiez-le avec `dpkg-deb -f FICHIER.deb Depends` avant de le redistribuer.
+
+### Arch Linux
+
+```bash
+sudo pacman -U ./stepwatch-VERSION-1-x86_64.pkg.tar.zst
+stepwatch
+```
+
+`pacman` installe les dépendances depuis les dépôts Arch, y compris une police si aucune n'est présente (`ttf-font` : `pacman` propose alors un choix). Pour retirer l'application : `sudo pacman -R stepwatch`. Le paquet est construit par `makepkg`, sans privilèges, dans l'image officielle `archlinux:base-devel` ; la CI l'installe, le teste sous X11 et sous Wayland, puis le retire dans un conteneur `archlinux:base`. Il n'est pas signé avec une clé de mainteneur Arch : comparez son SHA-256 à celui de `SHA256SUMS-linux.txt`.
+
+### Wayland
+
+Tk, la bibliothèque graphique de StepWatch, n'a pas de backend Wayland natif. Dans une session Wayland (GNOME, KDE Plasma, Sway, Hyprland…), il s'affiche par **XWayland**, présent par défaut sur la plupart des bureaux. Si XWayland manque, StepWatch s'arrête avec un message qui indique le paquet à installer :
+
+```bash
+sudo apt install xwayland        # Debian, Ubuntu
+sudo pacman -S xorg-xwayland     # Arch Linux
+```
+
+La fenêtre déclare la classe `Stepwatch`, ce qui permet au dock d'afficher l'icône de StepWatch. Avec une mise à l'échelle fractionnaire, certains bureaux affichent les applications XWayland légèrement floues ; c'est une limite de XWayland, pas de StepWatch.
 
 ## Construire depuis les sources
 
@@ -65,7 +90,7 @@ Le script installe `requirements-dev.txt`, exécute les tests, puis appelle PyIn
 
 Ce script ne fournit ni installeur MSI, ni signature de code, ni validation antivirus. Testez le résultat sur un poste Windows distinct.
 
-### Paquet Debian
+### Paquets Debian et Arch Linux
 
 Utilisez Ubuntu 22.04 amd64 pour retrouver la compatibilité de la CI. Il faut Python 3.11 ou ultérieur avec Tkinter, `dpkg-deb` et les dépendances de `requirements-dev.txt` :
 
@@ -81,7 +106,16 @@ Le script crée `dist/stepwatch_VERSION_amd64.deb` sans privilège root. Les fic
 .venv/bin/python scripts/build_deb.py --bundle dist/StepWatch --output dist
 ```
 
-Les liens symboliques qui sortent du bundle sont refusés.
+Les liens symboliques qui sortent du bundle sont refusés. Les bibliothèques X11 et de polices du système de compilation (fontconfig, freetype, Xft, X11…) ne sont pas embarquées : elles viennent du système cible, qui les déclare en dépendances. Sinon, un fontconfig ancien ne sait pas lire la configuration d'une distribution plus récente.
+
+Pour le paquet Arch, conservez le bundle, puis préparez le PKGBUILD et construisez-le avec `makepkg` en utilisateur non root, par exemple dans un conteneur Arch :
+
+```bash
+.venv/bin/python scripts/build_deb.py --output dist --keep-bundle build/StepWatch
+.venv/bin/python scripts/build_arch.py --bundle build/StepWatch --output build/arch
+docker run --rm -v "$PWD/build/arch:/build" -w /build archlinux:base-devel bash -euc \
+  'useradd -m packager && chown -R packager:packager /build && runuser -u packager -- makepkg --noconfirm --nodeps'
+```
 
 ## Publier une nouvelle version
 
