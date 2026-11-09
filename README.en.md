@@ -4,7 +4,7 @@
 
 StepWatch documents an IT support session step by step, using the pixels visible on the technician's Windows workstation. Each local click or visual change becomes an annotated screenshot, and the HTML report can be read offline. Screenshots and reports remain on the workstation: no agent is installed on the client's computer, and nothing is sent over the Internet.
 
-Version **0.3** uses Python, Tkinter, Pillow, `mss` and `pynput`. No keystroke is recorded, and sensitive areas can be masked before images are written. Microsoft has deprecated the Windows Steps Recorder (`psr.exe`); StepWatch is a local alternative designed for remote support.
+Version **0.4** uses Python, Tkinter, Pillow, `mss` and `pynput`. No keystroke is recorded, and sensitive areas can be masked before images are written. Microsoft has deprecated the Windows Steps Recorder (`psr.exe`); StepWatch is a local alternative designed for remote support.
 
 The application interface and the documentation in `docs/` are in French.
 
@@ -18,7 +18,8 @@ Executables are published in the [Releases](https://github.com/1002-AZ-2001/Step
 | --- | --- |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11: a single file, no installation. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows: portable folder, extract it entirely. |
-| `stepwatch_VERSION_amd64.deb` | Ubuntu 22.04+ and Debian 12+: ShareX import and reports only. |
+| `stepwatch_VERSION_amd64.deb` | Debian 12+ and Ubuntu 22.04+: ShareX import and reports only. |
+| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux: ShareX import and reports only. |
 | `SHA256SUMS-*.txt` | Download verification. |
 
 Python is bundled. The Windows executables are not signed yet, so SmartScreen may show a warning: check the SHA-256 first. Installation, verification and building from source are described in the [distribution guide](docs/distribution.md) (French).
@@ -26,10 +27,14 @@ Python is bundled. The Windows executables are not signed yet, so SmartScreen ma
 ```bash
 # Debian or Ubuntu, after downloading the .deb
 sudo apt install ./stepwatch_VERSION_amd64.deb
+# Arch Linux, after downloading the package
+sudo pacman -U ./stepwatch-VERSION-1-x86_64.pkg.tar.zst
+# Launch, or check the installation without personal data
 stepwatch
+stepwatch --self-test
 ```
 
-**Recording requires Windows.** On Linux, the interface only offers the ShareX import and the reports.
+**Recording requires Windows.** On Linux, the interface only offers the ShareX import and the reports, in X11 and **Wayland** sessions alike. On Wayland, StepWatch is displayed through XWayland, available by default on most desktops: see the [distribution guide](docs/distribution.md#wayland) (French).
 
 ### From source, on Windows
 
@@ -99,7 +104,7 @@ The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/ste
 - [Architecture](docs/architecture.md): modules, threads and guarantees.
 - [Validation](docs/validation.md): automated tests, CI, real Windows checklist and measurements.
 - [Distribution](docs/distribution.md): building executables and publishing a new version (one release per version).
-- [Roadmap](docs/FEUILLE_DE_ROUTE.md): versions 0.4 (shareable reports), 0.5 (more reliable capture) and 1.0 (distribution).
+- [Roadmap](docs/FEUILLE_DE_ROUTE.md): versions 0.5 (shareable reports), 0.6 (more reliable capture) and 1.0 (distribution), and Linux recording under study.
 - [Changelog](CHANGELOG.md) and [project history](docs/HISTORIQUE.md).
 
 ```bash

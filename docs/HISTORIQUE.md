@@ -6,4 +6,6 @@ La version 0.2.0 (7 novembre 2026) a intégré les correctifs et améliorations 
 
 La version 0.3.0 (9 novembre 2026) est la première publiée dans les Releases GitHub, avec une Release par version désormais. Elle apporte la CI Windows et Linux complète, la surveillance du hook souris, les notes du technicien et le rapport Markdown. Le README a été traduit en anglais par un contributeur, DokT.
 
+La version 0.4.0 (9 novembre 2026) ajoute le paquet Arch Linux, vérifie le paquet Debian 12 et le fonctionnement sous Wayland par XWayland.
+
 Les évolutions suivantes sont listées dans le [journal des modifications](../CHANGELOG.md).

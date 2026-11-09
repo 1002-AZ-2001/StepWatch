@@ -8,8 +8,10 @@ Le workflow [Tests et paquets Windows / Debian](https://github.com/1002-AZ-2001/
 
 | Job | Vérifications |
 | --- | --- |
-| Windows x64 | Installation par `install.ps1` ; suite complète, interface Tk comprise ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; sommes SHA-256. |
-| Linux amd64 (Ubuntu 22.04) | Lint `ruff` ; `pip check` ; suite complète sous Xvfb, interface Tk et vraie capture MSS comprises ; construction du `.deb`, installation par `apt` et lancement contrôlé (`smoke_linux_bundle.py`) ; sommes SHA-256. |
+| Windows x64 | Installation par `install.ps1` ; suite complète, interface Tk comprise ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; `StepWatch.exe --self-test` ; sommes SHA-256. |
+| Linux amd64 (Ubuntu 22.04) | Lint `ruff` ; `pip check` ; suite complète sous Xvfb, interface Tk et vraie capture MSS comprises ; construction du `.deb`, installation par `apt`, lancement contrôlé (`smoke_linux_bundle.py`) et `stepwatch --self-test` sous X11 ; auto-test dans une session **Wayland** réelle (weston headless + XWayland) et message explicite sans XWayland (`smoke_wayland.py`) ; sommes SHA-256. |
+| Debian 12 (conteneur) | Installation du `.deb` par `apt`, `stepwatch --self-test` avec l'interface, désinstallation complète. |
+| Arch Linux (conteneurs) | Paquet construit par `makepkg` non root ; installation par `pacman`, auto-test X11 et Wayland (weston + `xorg-xwayland`), désinstallation complète. |
 | Publier la version | Notes tirées de `CHANGELOG.md`, tag et Release, uniquement pour une version pas encore publiée (voir [distribution](distribution.md)). |
 
 Les tests simulent le backend Windows pour les cas difficiles à provoquer : fenêtre fermée, verrou d'antivirus, hook retiré par Windows, pause pendant une capture, etc. **Ces simulations ne remplacent pas un essai sur un poste réel** : hooks, DPI mixte, télémaintenance et bureau sécurisé UAC ne sont pas reproduits par la CI.
@@ -53,7 +55,8 @@ Vérifiez le bilan du runner : un test graphique ignoré faute d'affichage ne co
 7. Testez une zone masquée : aucun pixel sensible ne doit apparaître dans les PNG, l'aperçu ou les rapports. Vérifiez de nouveau après un redimensionnement.
 8. Arrêtez puis relancez une session, et fermez l'application pendant un enregistrement. Vérifiez le rapport, la libération des hooks et l'absence de capture après l'arrêt.
 9. Importez des images ShareX, ouvrez le rapport hors ligne et comparez les sources avant et après.
-10. Cliquez dans une fenêtre lancée en administrateur pendant l'enregistrement : notez si le journal signale une réinstallation du hook.
+10. Sous Linux (GNOME ou KDE, en session Wayland), lancez StepWatch depuis le menu : la fenêtre doit s'ouvrir avec l'icône StepWatch dans le dock. Importez des images ShareX et ouvrez le rapport.
+11. Cliquez dans une fenêtre lancée en administrateur pendant l'enregistrement : notez si le journal signale une réinstallation du hook.
 
 ## Mesures
 

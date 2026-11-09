@@ -14,6 +14,7 @@ from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, simple
 
 from PIL import Image, ImageTk
 
+from .display import WINDOW_CLASS
 from .engine import Recorder
 from .models import CaptureConfig, CaptureTarget, Rect
 from .platform import WindowsBackend
@@ -725,7 +726,7 @@ class StepWatchApp:
 
 
 def run_app(log_path: Path | None = None) -> None:
-    root = tk.Tk()
+    root = tk.Tk(className=WINDOW_CLASS)
     app = StepWatchApp(root, log_path)
     try:
         root.mainloop()
