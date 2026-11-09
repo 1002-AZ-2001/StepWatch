@@ -26,6 +26,11 @@ class CIMetadataTests(unittest.TestCase):
                 with self.subTest(version=version), self.assertRaises(ValueError):
                     version_for_build(root)
 
+    def test_package_version_matches_pyproject(self):
+        import stepwatch
+        self.assertEqual(stepwatch.__version__, version_for_build())
+
+
 
 if __name__ == "__main__":
     unittest.main()

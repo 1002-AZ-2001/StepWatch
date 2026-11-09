@@ -158,36 +158,78 @@ jobs:
           retention-days: 30
 
   release:
-    name: Publier les paquets
+    # One GitHub release per version: merging a new pyproject.toml version
+    # into main publishes it (the tag is created here); pushing a matching
+    # v* tag works too. A version already published is never replaced from
+    # main, so ordinary merges do not touch existing releases.
+    name: Publier la version
     needs: [windows, linux]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      github.event_name == 'push' &&
+      (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
 
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Notes de version depuis CHANGELOG.md
+        id: notes
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_metadata.py >/dev/null
+          echo "tag=$(python3 scripts/release_notes.py --output release-notes.md)" >> "$GITHUB_OUTPUT"
+          cat release-notes.md
+
+      - name: Vérifier si la version est déjà publiée
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.notes.outputs.tag }}
+        run: |
+          set -euo pipefail
+          publish=true
+          if [ "$GITHUB_REF_TYPE" = branch ]; then
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "::notice::$RELEASE_TAG est déjà publiée ; rien à faire."
+              publish=false
+            elif gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "::notice::Le tag $RELEASE_TAG existe : son propre workflow publie la version."
+              publish=false
+            fi
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.check.outputs.publish == 'true'
         with:
           pattern: stepwatch-*
           path: release-assets
           merge-multiple: true
 
       - name: Publier les fichiers
+        if: steps.check.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ steps.notes.outputs.tag }}
         run: |
           set -euo pipefail
-          cd release-assets
-          ls -l
-
+          ls -l release-assets
+          title="StepWatch $RELEASE_TAG — Windows et Debian"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" ./* --clobber
+            # Only reachable from a tag push: refresh that version's files.
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+            gh release edit "$RELEASE_TAG" --title "$title" --notes-file release-notes.md
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release create "$RELEASE_TAG" release-assets/* --verify-tag \
+              --title "$title" --notes-file release-notes.md
           else
-            gh release create "$RELEASE_TAG" ./* \
-              --verify-tag \
-              --title "StepWatch $RELEASE_TAG" \
-              --generate-notes
+            gh release create "$RELEASE_TAG" release-assets/* --target "$GITHUB_SHA" \
+              --title "$title" --notes-file release-notes.md --latest
           fi
