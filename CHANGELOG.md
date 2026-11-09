@@ -2,6 +2,16 @@
 
 ## Non publié
 
+Rien pour l'instant.
+
+## 0.3.0 — 2026-11-09
+
+Première version publiée dans les Releases GitHub, pour Windows (exécutable unique et archive portable) et Linux (paquet `.deb`). Comme pour la 0.2.0, les hooks, la capture et les exécutables Windows sont vérifiés par la CI Windows, mais restent à valider sur un poste réel.
+
+- **Une Release par version** : quand une nouvelle version de `pyproject.toml` arrive sur `main`, la CI publie la Release `vX.Y.Z` après tous les tests et le contrôle des paquets. Les notes viennent de la section correspondante de ce journal ; une version déjà publiée n'est jamais remplacée depuis `main`. Un tag `v*` poussé à la main reste possible.
+- README réorganisé (présentation, téléchargement, parcours, liens vers la documentation) ; version anglaise dans `README.en.md`. Guide de distribution, validation et architecture déplacés dans `docs/`.
+- Dépendances mises à jour par Dependabot : Pillow 13.0.0, mss 10.2.0, pynput 1.8.2 et actions GitHub ; la suite complète passe avec ces versions.
+- `stepwatch.__version__` est vérifié par un test contre `pyproject.toml`.
 - GitHub Actions prépare une distribution portable et un exécutable unique pour Windows, ainsi qu'un paquet `.deb` amd64 pour Linux. Les builds sont déclenchés par les push vers `main`, les pull requests, les tags `v*` ou manuellement ; un tag égal à la version du projet permet une publication dans les Releases après réussite.
 - Le paquet Linux embarque Python, ajoute un raccourci et déclare les dépendances système ; l'import ShareX et les rapports sont disponibles, tandis que l'enregistrement reste réservé à Windows. Le minimum glibc tient compte du système de compilation, avec un plancher à 2.35.
 - Tests de structure du paquet Debian, des permissions, des dépendances et du rejet des liens sortants ; documentation du téléchargement des artefacts et de l'installation.
