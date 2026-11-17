@@ -2,6 +2,10 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 0.5 — relecture et performances
+
+La vue **Étapes** rouvre une session et charge seulement l'image sélectionnée. La capture et l'écriture PNG s'exécutent en parallèle. Le correctif de fermeture Tk évite que le nettoyage des objets graphiques soit effectué par un thread de travail.
+
 ## Version 0.4 — Linux : Arch, Debian 12 et Wayland (livrée)
 
 | Chantier | Fonction livrée | Limite à connaître |
@@ -30,7 +34,7 @@ Sous Linux, l'application reste limitée à l'import ShareX et aux rapports.
 | 0.1.0 | Première implémentation : capture par clics et changements visuels, masques, rapports HTML hors ligne, import ShareX. |
 | 0.2.0 | Corrections de l'audit : clics localisés au moment du clic, dialogues possédés, comparaison accélérée, écritures robustes, double-clic regroupé, rapport autonome, journal de diagnostic. Voir [AUDIT_INTEGRATION.md](AUDIT_INTEGRATION.md). |
 
-## Version 0.5 proposée — rapports prêts à partager
+## À venir — rapports prêts à partager
 
 Un rapport est fait pour être transmis. Ce chantier traite le risque principal de l'outil, une donnée sensible oubliée dans une capture, et rend le rapport présentable sans retouche externe. Tout s'y vérifie sur des fichiers, donc sous Linux et en CI, sans poste Windows.
 
@@ -39,7 +43,6 @@ Un rapport est fait pour être transmis. Ce chantier traite le risque principal 
 | Éditeur de session après l'arrêt | Supprimer une étape inutile, corriger ou compléter une annotation, ajouter une note à n'importe quelle étape. Rapports régénérés. | Moyen : nouvelle fenêtre Tk, réécriture de `steps.json`. | Une étape supprimée doit-elle garder son PNG d'origine ? À décider ; proposition : déplacement dans `captures/retirees/`, exclu des rapports. |
 | Masquage a posteriori | Noircir à la souris une zone oubliée sur une capture déjà enregistrée, avant partage. | Moyen : dessin sur l'image dans l'éditeur. | Écrase définitivement les pixels du PNG ; le rapport autonome existant doit être régénéré. |
 | Masques dessinés avant l'enregistrement | Dessiner les zones sur un aperçu de la cible au lieu de saisir `x,y,largeur,hauteur`. | Moyen. | L'aperçu nécessite une capture de la cible, donc Windows pour l'essai réel. |
-| Correctif d'interface | Le chemin de la session est tronqué sous les boutons « Ouvrir le dossier » et « Rapport autonome ». | Faible. | — |
 
 ## Version 0.6 proposée — capture plus fiable
 
@@ -70,9 +73,9 @@ Ce chantier demande de nouvelles dépendances (D-Bus, PipeWire ou GStreamer) et 
 
 ## Idées non retenues pour l'instant
 
-- **Détection automatique des données sensibles (OCR)** : dépendances lourdes, et risque de donner une fausse impression de sécurité. Le masquage a posteriori de la version 0.5 couvre le besoin avec un contrôle humain.
+- **Détection automatique des données sensibles (OCR)** : dépendances lourdes, et risque de donner une fausse impression de sécurité. Le masquage a posteriori prévu couvre le besoin avec un contrôle humain.
 - **Export PDF natif** : l'impression du rapport HTML en PDF depuis le navigateur suffit, grâce à la feuille de style d'impression.
-- **Images WebP ou JPEG** : gain de taille réel pour le rapport autonome, mais perte de netteté sur le texte en JPEG. À réexaminer après la version 0.5.
+- **Images WebP ou JPEG** : gain de taille réel pour le rapport autonome, mais perte de netteté sur le texte en JPEG. À réexaminer avec l'édition des rapports.
 
 ## Références
 

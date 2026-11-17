@@ -121,7 +121,7 @@ docker run --rm -v "$PWD/build/arch:/build" -w /build archlinux:base-devel bash 
 
 Chaque version a sa Release GitHub. La publication est automatique :
 
-1. Choisissez le numéro `MAJEUR.MINEUR.CORRECTIF` et reportez-le dans `pyproject.toml` (`version`) et dans `stepwatch/__init__.py` (`__version__`). Un test vérifie que ces deux valeurs concordent.
+1. Choisissez le numéro `MAJEUR.MINEUR.CORRECTIF` et reportez-le dans `pyproject.toml` et `stepwatch/__init__.py`. Le manifeste Windows `scripts/StepWatch.manifest` reprend le même numéro suivi de `.0`.
 2. Dans `CHANGELOG.md`, déplacez le contenu de « Non publié » sous un nouveau titre `## VERSION — AAAA-MM-JJ`. Cette section devient le texte de la Release : sans elle, la publication est refusée.
 3. Fusionnez ces changements dans `main` par une pull request.
 

@@ -4,7 +4,7 @@
 
 StepWatch documente une intervention informatique étape par étape, à partir des pixels visibles sur le poste Windows du technicien. Chaque clic local ou changement visuel devient une capture annotée. Le rapport HTML se consulte hors ligne. Captures et rapports restent sur le poste : aucun agent n'est installé chez le client, et rien n'est envoyé sur Internet.
 
-La version **0.4** utilise Python, Tkinter, Pillow, `mss` et `pynput`. Aucune frappe clavier n'est enregistrée. Les zones sensibles peuvent être masquées avant l'écriture des images. Microsoft a déprécié l'Enregistreur d'actions de Windows (`psr.exe`) : StepWatch en est une alternative locale, pensée pour la télémaintenance.
+StepWatch utilise Python, Tkinter, Pillow, `mss` et `pynput`. Aucune frappe clavier n'est enregistrée. Les zones sensibles peuvent être masquées avant l'écriture des images. Microsoft a déprécié l'Enregistreur d'actions de Windows (`psr.exe`) : StepWatch en est une alternative locale, pensée pour la télémaintenance.
 
 ![Interface de StepWatch sous Linux après l'import de captures synthétiques](docs/stepwatch.png)
 
@@ -103,7 +103,7 @@ Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/
 - [Architecture](docs/architecture.md) : modules, threads et garanties.
 - [Validation](docs/validation.md) : tests automatisés, CI, liste de vérification sur Windows réel et mesures.
 - [Distribution](docs/distribution.md) : construction des exécutables et publication d'une nouvelle version (une Release par version).
-- [Feuille de route](docs/FEUILLE_DE_ROUTE.md) : versions 0.5 (rapports prêts à partager), 0.6 (capture plus fiable) et 1.0 (diffusion), et enregistrement sous Linux à étudier.
+- [Feuille de route](docs/FEUILLE_DE_ROUTE.md) : dernières versions, édition de rapports, fiabilité de la capture et diffusion.
 - [Journal des modifications](CHANGELOG.md) et [historique du projet](docs/HISTORIQUE.md).
 
 ```bash

@@ -4,7 +4,7 @@
 
 StepWatch documents an IT support session step by step, using the pixels visible on the technician's Windows workstation. Each local click or visual change becomes an annotated screenshot, and the HTML report can be read offline. Screenshots and reports remain on the workstation: no agent is installed on the client's computer, and nothing is sent over the Internet.
 
-Version **0.4** uses Python, Tkinter, Pillow, `mss` and `pynput`. No keystroke is recorded, and sensitive areas can be masked before images are written. Microsoft has deprecated the Windows Steps Recorder (`psr.exe`); StepWatch is a local alternative designed for remote support.
+StepWatch uses Python, Tkinter, Pillow, `mss` and `pynput`. No keystroke is recorded, and sensitive areas can be masked before images are written. Microsoft has deprecated the Windows Steps Recorder (`psr.exe`); StepWatch is a local alternative designed for remote support.
 
 The application interface and the documentation in `docs/` are in French.
 
@@ -105,7 +105,7 @@ The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/ste
 - [Architecture](docs/architecture.md): modules, threads and guarantees.
 - [Validation](docs/validation.md): automated tests, CI, real Windows checklist and measurements.
 - [Distribution](docs/distribution.md): building executables and publishing a new version (one release per version).
-- [Roadmap](docs/FEUILLE_DE_ROUTE.md): versions 0.5 (shareable reports), 0.6 (more reliable capture) and 1.0 (distribution), and Linux recording under study.
+- [Roadmap](docs/FEUILLE_DE_ROUTE.md): recent releases, report editing, capture reliability and distribution.
 - [Changelog](CHANGELOG.md) and [project history](docs/HISTORIQUE.md).
 
 ```bash

@@ -2,11 +2,19 @@
 
 ## Non publié
 
+Rien pour l'instant.
+
+## 0.5.0 — 2026-11-18
+
+Cette version permet de rouvrir et relire les interventions dans StepWatch. Elle réduit aussi le travail de comparaison des captures et répartit la capture et l'encodage PNG entre deux threads.
+
 - Barre de capture compacte et onglets **Capture**, **Étapes** et **Journal**. L'onglet Étapes rouvre les interventions existantes et charge l'aperçu de la sélection sur demande.
 - La capture et l'encodage PNG peuvent avancer sur des cœurs distincts. L'écriture reste ordonnée, avec une seule image soumise à la fois.
 - Les images identiques évitent le filtrage. Le mode normal réutilise une référence réduite et le mode conservateur limite ses allocations temporaires en comparant par bandes. L'export autonome encode le PNG par blocs.
 - Libération explicite des objets Tk sur le thread graphique après arrêt des traitements, afin d'éviter un abandon natif de Tk 8.6 lors d'un ramasse-miettes déclenché depuis un autre thread.
-- Régression isolée pour le cycle de vie de l'interpréteur Tcl ; journal Linux conservé en artefact et traces natives activées en cas de nouvel échec.
+- Test de régression pour la fermeture de Tk. En cas d'échec dans la CI Linux, les traces natives sont conservées avec le journal.
+
+Sur 20 captures 4K synthétiques sous Linux, le temps CPU passe de 5,62 à 3,98 s et le pic RAM de 260 à 156 Mio. Les détails figurent dans le document de validation.
 
 ## 0.4.0 — 2026-11-09
 
