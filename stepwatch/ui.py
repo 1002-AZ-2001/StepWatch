@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, simpledialog, ttk
 
@@ -43,6 +45,8 @@ class StepWatchApp:
 
     def __init__(self, root: tk.Tk, log_path: Path | None = None) -> None:
         self.root = root
+        self._ui_thread = threading.get_ident()
+        self._disposed = False
         # Sans console (exécutable --windowed), Tk écrirait ces erreurs sur
         # un sys.stderr absent : elles seraient perdues.
         self.root.report_callback_exception = self._report_callback_exception
@@ -601,13 +605,14 @@ class StepWatchApp:
             messagebox.showerror("Dossier requis", str(exc), parent=self.root)
             return
         name = self.name.get().strip() or "Import ShareX"
+        events = self._background_events
 
         def work() -> None:
             try:
                 directory = import_sharex(Path(source), output, name=name)
-                self._background_events.put({"type": "import_done", "directory": str(directory)})
+                events.put({"type": "import_done", "directory": str(directory)})
             except Exception as exc:
-                self._background_events.put({"type": "error", "message": f"Import interrompu : {exc}"})
+                events.put({"type": "error", "message": f"Import interrompu : {exc}"})
 
         self._import_thread = threading.Thread(target=work, name="stepwatch-import", daemon=False)
         self._import_thread.start()
@@ -624,6 +629,7 @@ class StepWatchApp:
         # rather than exporting an apparently complete but stale report.
         store = (recorder.store if recorder is not None
                  and recorder.store.directory == directory else None)
+        events = self._background_events
 
         def work() -> None:
             try:
@@ -631,12 +637,11 @@ class StepWatchApp:
                     store.close()
                 path = export_standalone(directory)
                 markdown = export_markdown(directory)
-                self._background_events.put({"type": "export_done", "path": str(path),
-                                             "size": path.stat().st_size,
-                                             "markdown": str(markdown)})
+                events.put({"type": "export_done", "path": str(path),
+                            "size": path.stat().st_size, "markdown": str(markdown)})
             except Exception as exc:
-                self._background_events.put({"type": "error", "title": "Export impossible",
-                                             "message": f"Export du rapport autonome interrompu : {exc}"})
+                events.put({"type": "error", "title": "Export impossible",
+                            "message": f"Export du rapport autonome interrompu : {exc}"})
 
         self._export_thread = threading.Thread(target=work, name="stepwatch-export", daemon=False)
         self._export_thread.start()
@@ -657,27 +662,72 @@ class StepWatchApp:
             self._write_log(f"Ouverture du dossier impossible : {exc}")
 
     def shutdown(self, timeout: float = 5) -> bool:
-        """Arrête l’enregistrement si la boucle Tk se termine sans _close()."""
+        """Arrête les travailleurs avant de libérer Tk, sans les forcer."""
+        deadline = time.monotonic() + max(0, timeout)
+        complete = True
         if self._recorder is not None:
             try:
-                stopped = self._recorder.stop(timeout=timeout)
+                stopped = self._recorder.stop(timeout=max(0, timeout))
             except Exception as exc:
                 LOGGER.exception("Arrêt de l’enregistrement impossible à la fermeture")
                 try:
                     self._write_log(f"Arrêt incomplet : {exc}. Le processus peut rester actif.", level=None)
                 except Exception:
                     pass  # La fenêtre peut déjà avoir été détruite.
-                return False
-            if not stopped:
-                message = (f"Arrêt incomplet après {timeout:g} s : le thread de capture est encore actif. "
-                           "Le processus peut rester ouvert ; aucune fermeture forcée n’est effectuée.")
-                LOGGER.warning(message)
-                try:
-                    self._write_log(message, level=None)
-                except Exception:
-                    pass
-                return False
-        return True
+                complete = False
+            else:
+                if not stopped:
+                    message = (f"Arrêt incomplet après {timeout:g} s : le thread de capture est encore actif. "
+                               "Le processus peut rester ouvert ; aucune fermeture forcée n’est effectuée.")
+                    LOGGER.warning(message)
+                    try:
+                        self._write_log(message, level=None)
+                    except Exception:
+                        pass
+                    complete = False
+        for worker in (getattr(self, "_import_thread", None), getattr(self, "_export_thread", None)):
+            if worker is not None and worker is not threading.current_thread() and worker.is_alive():
+                worker.join(timeout=max(0, deadline - time.monotonic()))
+                if worker.is_alive():
+                    complete = False
+                    LOGGER.warning("Le traitement %s est encore actif ; les ressources Tk sont conservées.", worker.name)
+        return complete
+
+    def dispose(self) -> None:
+        """Libère Tk sur son thread, après l’arrêt des travailleurs.
+
+        Supprimer la méthode liée restaure celle de la classe Tk. Réaffecter
+        une méthode liée à root créerait un autre cycle. Sans cette rupture,
+        des StringVar/Tk peuvent être détruits plus tard par le GC d’un worker
+        et provoquer Tcl_AsyncDelete sous Tk 8.6.
+        """
+        if getattr(self, "_disposed", False):
+            return
+        if threading.get_ident() != getattr(self, "_ui_thread", threading.get_ident()):
+            raise RuntimeError("Les ressources Tk doivent être libérées sur le thread de l’interface.")
+        callback = self.root.__dict__.get("report_callback_exception")
+        if getattr(callback, "__self__", None) is self:
+            del self.root.report_callback_exception
+        try:
+            self._backend.close()
+        except Exception:
+            LOGGER.exception("Fermeture des ressources de sélection impossible")
+        if self._poll_id is not None:
+            try:
+                self.root.after_cancel(self._poll_id)
+            except tk.TclError:
+                pass  # Une fermeture externe peut déjà avoir détruit les widgets.
+            self._poll_id = None
+        try:
+            exists = self.root.winfo_exists()
+        except tk.TclError:
+            exists = False
+        if exists:
+            self.root.destroy()
+        self._photo = None
+        self._preview_key = None
+        self._last_image = None
+        self._disposed = True
 
     def _close(self) -> None:
         if self._closing:
@@ -695,14 +745,7 @@ class StepWatchApp:
             background_done = not self._background_running()
             if not recorder_done or not background_done:
                 return
-            try:
-                self._backend.close()
-            except Exception as exc:
-                LOGGER.exception("Fermeture des ressources de sélection impossible")
-                self._write_log(f"Fermeture des ressources de sélection : {exc}", level=None)
-            if self._poll_id is not None:
-                self.root.after_cancel(self._poll_id)
-            self.root.destroy()
+            self.dispose()
             retry = False
         except Exception as exc:
             # A transient stop/report/display error must not strand the closing
@@ -727,11 +770,26 @@ class StepWatchApp:
 
 def run_app(log_path: Path | None = None) -> None:
     root = tk.Tk(className=WINDOW_CLASS)
-    app = StepWatchApp(root, log_path)
+    app = None
     try:
+        app = StepWatchApp(root, log_path)
         root.mainloop()
     finally:
         # Ctrl+C dans la console ou exception sortie de la boucle Tk : sans
         # cet arrêt, le thread de capture (non démon) continuait d’enregistrer
         # sans interface et empêchait le processus de se terminer.
-        app.shutdown()
+        try:
+            if app is not None:
+                if app.shutdown():
+                    app.dispose()
+            else:
+                # Construction interrompue : le callback peut déjà référencer
+                # l’instance partiellement construite.
+                root.__dict__.pop("report_callback_exception", None)
+                root.destroy()
+        finally:
+            # Les wrappers Tk restants sont collectés sur leur thread propriétaire,
+            # après retrait des références locales, avant tout futur worker.
+            app = None
+            root = None
+            gc.collect()

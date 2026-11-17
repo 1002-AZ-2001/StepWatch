@@ -1,5 +1,6 @@
 """Opt-in end-to-end MSS capture on a Linux virtual display, without Win32 hooks."""
 import json
+import gc
 import os
 from pathlib import Path
 import tempfile
@@ -58,6 +59,14 @@ class LiveCaptureTests(unittest.TestCase):
                 self.assertIn("Changement visuel détecté", report)
                 self.assertIn('src="captures/000002.png"', report)
         finally:
-            if recorder is not None:
-                recorder.stop()
-            root.destroy()
+            try:
+                if recorder is not None:
+                    self.assertTrue(recorder.stop(), "Le thread de capture n'est pas arrêté.")
+            finally:
+                try:
+                    root.destroy()
+                finally:
+                    # Dispose the Tcl interpreter on its creator thread,
+                    # before another test starts a capture/export worker.
+                    recorder = root = None
+                    gc.collect()

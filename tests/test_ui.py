@@ -5,12 +5,14 @@ These tests never claim to exercise actual Windows hooks or capture.
 """
 
 import os
+import gc
 import json
 from pathlib import Path
 import queue
 import re
 import sys
 import tempfile
+import threading
 import tkinter as tk
 import unittest
 from unittest.mock import Mock, patch
@@ -45,14 +47,32 @@ class UITests(unittest.TestCase):
         self.root.update()
 
     def tearDown(self):
+        app, root = self.app, self.root
+        errors = []
         try:
-            if self.root.winfo_exists():
-                if self.app._poll_id:
-                    self.root.after_cancel(self.app._poll_id)
-                self.root.destroy()
-        except tk.TclError:
-            pass
-        self.temp.cleanup()
+            if app._recorder is not None:
+                try:
+                    if not app._recorder.stop(timeout=5):
+                        errors.append("Le thread de capture n'est pas arrêté.")
+                except Exception as exc:
+                    errors.append(f"Arrêt du moteur : {exc}")
+            for name in ("_import_thread", "_export_thread"):
+                worker = getattr(app, name)
+                if isinstance(worker, threading.Thread):
+                    worker.join(timeout=5)
+                    if worker.is_alive():
+                        errors.append(f"Thread {name} encore actif.")
+            app.dispose()
+        finally:
+            # A bound report_callback_exception keeps app/root/StringVars in
+            # a cycle even after destroy(). Tk8.6 aborts if a later worker
+            # happens to collect its Tcl interpreter. Release all fixture
+            # references first, then collect while still on the GUI thread.
+            self.app = self.root = self.backend = None
+            del app, root
+            gc.collect()
+            self.temp.cleanup()
+        self.assertEqual(errors, [])
 
     def test_constructor_does_not_record(self):
         self.assertIsNone(self.app._recorder)
@@ -451,6 +471,14 @@ class ShutdownTests(unittest.TestCase):
             self.assertFalse(self.app.shutdown(timeout=.01))
         self.assertIsNotNone(logs.records[0].exc_info)
         self.assertIn("écriture impossible", logs.output[0])
+
+    def test_shutdown_skips_background_threads_whose_start_failed(self):
+        self.app._recorder = None
+        self.app._import_thread = threading.Thread(target=lambda: None)
+        self.app._export_thread = threading.Thread(target=lambda: None)
+        self.assertTrue(self.app.shutdown(timeout=.01))
+        self.assertIsNone(self.app._import_thread.ident)
+        self.assertIsNone(self.app._export_thread.ident)
 
 
 if __name__ == "__main__":

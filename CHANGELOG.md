@@ -2,7 +2,8 @@
 
 ## Non publié
 
-Rien pour l'instant.
+- Libération explicite des objets Tk sur le thread graphique après arrêt des traitements, afin d'éviter un abandon natif de Tk 8.6 lors d'un ramasse-miettes déclenché depuis un autre thread.
+- Régression isolée pour le cycle de vie de l'interpréteur Tcl ; journal Linux conservé en artefact et traces natives activées en cas de nouvel échec.
 
 ## 0.4.0 — 2026-11-09
 
