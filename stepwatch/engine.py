@@ -1,12 +1,15 @@
-"""Single capture worker; no keyboard listener and no network access.
+"""Capture and ordered PNG writing can overlap on separate threads.
 
 Native mouse callbacks hit-test the click with a few stateless Win32 queries,
 then only enqueue it. MSS resources are created, used and closed on the capture
-thread. Images sent to storage or the UI are redacted.
+thread. Only redacted images reach the writer or the UI. An intervention
+allows one submitted write and at most one frame being prepared for it.
 """
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import heapq
 import logging
 import queue
@@ -15,7 +18,7 @@ import time
 from typing import Callable
 
 from stepwatch.events import PreviewEventQueue
-from stepwatch.imaging import apply_masks, changed_percent, mark_click
+from stepwatch.imaging import VisualComparator, paint_click, paint_masks, preview_image
 from stepwatch.models import CaptureConfig, CaptureTarget
 from stepwatch.platform import DEFAULT_DOUBLE_CLICK, CaptureUnavailable, WindowsBackend
 from stepwatch.storage import ReportWriteError, SessionStore, StorageError
@@ -44,6 +47,7 @@ HOOK_SILENCE_GRACE_MAX = 30.0
 #: Hit-tests slower than this in the hook callback are logged: they approach
 #: the LowLevelHooksTimeout budget (300 ms by default).
 SLOW_HOOK_CALLBACK = 0.1
+HOOK_POLL_INTERVAL = 0.05
 
 
 _BUTTON_NAMES = {
@@ -258,17 +262,49 @@ class Recorder:
         self._ignored += 1
         self._emit("ignored", message)
 
+    def _write_capture(self, image, trigger, click, annotation, click_count, timestamp):
+        try:
+            step = self.store.save(image, trigger, click=click, annotation=annotation,
+                                   click_count=click_count, timestamp=timestamp)
+        except ReportWriteError as exc:
+            step, report_warning = exc.step, str(exc)
+        else:
+            report_warning = None
+        try:
+            preview = preview_image(image, PREVIEW_MAX_SIZE)
+        except Exception:
+            LOGGER.exception("Création de l’aperçu impossible")
+            preview = None  # The PNG is already on disk.
+        return step, report_warning, preview
+
     def _run(self):
         backend = listener = None
         pending = []
         last_sequence = None
-        previous = None
+        comparator = VisualComparator(self.config.conservative) if self.config.mode != "clicks" else None
+        writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="StepWatch-écriture")
+        writing: Future | None = None
         last_error = None
         report_error = False
         serial = 0
         fatal = False
         visual_due = time.monotonic()
         active_epoch = self._epoch
+
+        def finish_write():
+            nonlocal writing, report_error
+            if writing is None:
+                return
+            finished, writing = writing, None
+            step, warning, preview = finished.result()
+            if warning and not report_error:
+                self._emit("error", warning)
+            elif not warning and report_error:
+                self._emit("log", "Rapport de nouveau à jour.")
+            report_error = warning is not None
+            self._kept += 1
+            self._emit("saved", "Capture enregistrée.", step=step, image=preview)
+
         try:
             backend = self._backend_factory()
             # Fail early on unsupported platform/invalid initial selection.
@@ -288,18 +324,24 @@ class Recorder:
             watch_hook = listener is not None and callable(button_down)
             was_down = False
             previous_poll = time.monotonic()
+            next_hook_poll = previous_poll
             unreported_since = unreported_after = None
             grace = HOOK_SILENCE_GRACE
             while not self._stop.is_set():
                 self._wake.clear()
                 if listener is not None and not listener.is_alive():
                     raise RuntimeError("Le hook souris s’est interrompu ; l’enregistrement est arrêté.")
+                if writing is not None and writing.done():
+                    finish_write()
+                if not self._notes.empty():
+                    finish_write()
+                    self._write_notes()
                 now = time.monotonic()
-                self._write_notes()
                 if self._slow_hook:
                     slow, self._slow_hook = self._slow_hook, 0.0
                     LOGGER.warning("Localisation du clic lente dans le hook souris : %.0f ms", slow * 1000)
-                if watch_hook:
+                if watch_hook and now >= next_hook_poll:
+                    next_hook_poll = now + HOOK_POLL_INTERVAL
                     try:
                         down = bool(button_down())
                     except Exception:
@@ -384,14 +426,11 @@ class Recorder:
                         last_sequence = None
                     visual_due = now
                     active_epoch = epoch
-                if state != "recording":
-                    self._wake.wait(.1)
-                    continue
                 click = None
                 click_count = 0
                 annotation = ""
                 trigger = None
-                if pending and pending[0][0] <= now:
+                if state == "recording" and pending and pending[0][0] <= now:
                     _, _, pending_click = heapq.heappop(pending)
                     if pending_click is last_sequence:
                         last_sequence = None
@@ -401,21 +440,34 @@ class Recorder:
                     trigger = "local_click"
                     click, click_count = pending_click.located, pending_click.count
                     annotation = click_annotation(pending_click.button, click_count)
-                elif not pending and self.config.mode != "clicks" and now >= visual_due:
+                elif state == "recording" and not pending and comparator is not None and now >= visual_due:
                     trigger = "visual_change"
                 if trigger is None:
-                    self._wake.wait(.05)
+                    deadlines = []
+                    if watch_hook:
+                        deadlines.append(next_hook_poll)
+                    elif listener is not None:
+                        deadlines.append(now + .25)  # Listener liveness without a native probe.
+                    if state == "recording":
+                        if pending:
+                            deadlines.append(pending[0][0])
+                        elif comparator is not None:
+                            deadlines.append(visual_due)
+                    delay = max(0, min(deadlines) - time.monotonic()) if deadlines else None
+                    self._wake.wait(delay)
                     continue
                 # Pending local clicks defer visual capture, preventing a second
                 # visual step for the same delayed local action.
                 visual_due = now + self.config.interval
+                visual = trigger == "visual_change"
+                frame = output = sample = None
                 try:
                     rect = backend.resolve(self.target)
-                    raw = backend.grab(rect)
-                    clean = apply_masks(raw, self.config.masks)
+                    frame = backend.grab(rect)
+                    timestamp = datetime.now(timezone.utc)
                     with self._lock:
                         valid = self._state == "recording" and epoch == self._epoch and not self._stop.is_set()
-                        click_arrived = trigger == "visual_change" and not self._clicks.empty()
+                        click_arrived = visual and not self._clicks.empty()
                     if not valid:
                         self._ignored_event("Capture annulée par la pause ou l’arrêt.")
                         continue
@@ -425,45 +477,48 @@ class Recorder:
                     if last_error:
                         self._emit("log", "Cible de nouveau disponible.")
                         last_error = None
-                    if trigger == "visual_change" and previous is None:
+                    if frame.mode != "RGB":
+                        frame = frame.convert("RGB")
+                    paint_masks(frame, self.config.masks)
+                    sample = comparator.prepare(frame) if comparator is not None else None
+                    if visual and comparator.reference is None:
                         trigger = "initial"
                         annotation = "État initial de la zone sélectionnée."
-                    elif trigger == "visual_change":
-                        # Only visual samples need the comparison: a local
-                        # click is always kept, so skip the costly analysis.
-                        percent = changed_percent(previous, clean, self.config.conservative)
+                    elif visual:
+                        percent = comparator.compare(sample)
                         if percent < self.config.sensitivity:
                             self._ignored_event(f"Variation visuelle ignorée ({percent:.2f} %).")
                             continue
                         annotation = f"Changement visuel détecté ({percent:.2f} %) ; origine non déterminée."
-                    # Mask again after marker: sensitive rectangles stay entirely
-                    # black, including when a local click falls inside one.
-                    output = apply_masks(mark_click(clean, click), self.config.masks)
-                    try:
-                        step = self.store.save(output, trigger, click=click, annotation=annotation,
-                                               click_count=click_count)
-                    except ReportWriteError as exc:
-                        # The PNG is written and the step kept: the next save
-                        # or close() rewrites the report. A file briefly locked
-                        # by an antivirus must not end the intervention.
-                        step = exc.step
-                        if not report_error:
-                            self._emit("error", str(exc))
-                            report_error = True
-                    else:
-                        if report_error:
-                            self._emit("log", "Rapport de nouveau à jour.")
-                            report_error = False
-                    previous = clean
-                    self._kept += 1
-                    preview = output.copy()
-                    preview.thumbnail(PREVIEW_MAX_SIZE)
-                    self._emit("saved", "Capture enregistrée.", step=step, image=preview)
+                    finish_write()  # Backpressure: never queue a second PNG.
+                    output = frame
+                    if click is not None:
+                        # Only copy when the comparator needs these exact pixels.
+                        if sample is not None and sample.pixels is frame:
+                            output = frame.copy()
+                        paint_click(output, click)
+                        paint_masks(output, self.config.masks)
+                    # Recheck after analysis and an earlier write. Pause, Stop
+                    # and click acceptance are serialized with submission.
+                    with self._lock:
+                        if self._state != "recording" or epoch != self._epoch or self._stop.is_set():
+                            self._ignored_event("Capture annulée par la pause ou l’arrêt.")
+                            continue
+                        if visual and not self._clicks.empty():
+                            self._ignored_event("Comparaison différée : un clic local est arrivé pendant la capture.")
+                            continue
+                        writing = writer.submit(self._write_capture, output, trigger, click,
+                                                annotation, click_count, timestamp)
+                    writing.add_done_callback(lambda _result: self._wake.set())
+                    if comparator is not None:
+                        comparator.reference = sample
                 except CaptureUnavailable as exc:
                     if str(exc) != last_error:
                         self._emit("error", str(exc))
                         last_error = str(exc)
                     self._ignored_event("Cible indisponible ; nouvelle tentative automatique.")
+                finally:
+                    frame = output = sample = None
         except Exception as exc:
             fatal = True
             LOGGER.exception("Enregistrement interrompu")
@@ -471,12 +526,11 @@ class Recorder:
         finally:
             with self._lock:
                 self._locate = None
+                self._state = "stopping"  # Prevent new clicks or notes during finalisation.
             if pending or not self._clicks.empty():
                 self._emit("log", "Les clics encore en attente ont été annulés à l’arrêt.")
-            try:
-                self._write_notes()  # A note typed just before Stop is kept.
-            except Exception:
-                LOGGER.exception("Notes non écrites à l’arrêt")
+                while not self._clicks.empty():
+                    self._clicks.get_nowait()
             for resource in (listener, backend):
                 if resource is None:
                     continue
@@ -492,6 +546,20 @@ class Recorder:
                     fatal = True
                     LOGGER.exception("Libération des ressources impossible")
                     self._emit("error", f"Erreur de libération des ressources : {exc}")
+            try:
+                finish_write()
+            except Exception as exc:
+                fatal = True
+                LOGGER.exception("Écriture de la dernière capture impossible")
+                self._emit("error", f"Écriture de la dernière capture impossible : {exc}")
+            finally:
+                writer.shutdown(wait=True)
+            try:
+                self._write_notes()  # A note typed just before Stop is kept.
+            except Exception as exc:
+                fatal = True
+                LOGGER.exception("Notes non écrites à l’arrêt")
+                self._emit("error", f"Notes non écrites à l’arrêt : {exc}")
             try:
                 self.store.close()
             except Exception as exc:

@@ -2,6 +2,9 @@
 
 ## Non publié
 
+- Barre de capture compacte et onglets **Capture**, **Étapes** et **Journal**. L'onglet Étapes rouvre les interventions existantes et charge l'aperçu de la sélection sur demande.
+- La capture et l'encodage PNG peuvent avancer sur des cœurs distincts. L'écriture reste ordonnée, avec une seule image soumise à la fois.
+- Les images identiques évitent le filtrage. Le mode normal réutilise une référence réduite et le mode conservateur limite ses allocations temporaires en comparant par bandes. L'export autonome encode le PNG par blocs.
 - Libération explicite des objets Tk sur le thread graphique après arrêt des traitements, afin d'éviter un abandon natif de Tk 8.6 lors d'un ramasse-miettes déclenché depuis un autre thread.
 - Régression isolée pour le cycle de vie de l'interpréteur Tcl ; journal Linux conservé en artefact et traces natives activées en cas de nouvel échec.
 

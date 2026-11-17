@@ -8,6 +8,7 @@ temporary folder (except the usual diagnostic log).
 
 from __future__ import annotations
 
+import gc
 import logging
 import sys
 import tempfile
@@ -71,6 +72,7 @@ def check_interface() -> None:
     from .ui import StepWatchApp
 
     root = tk.Tk(className=WINDOW_CLASS)
+    app = None
     try:
         app = StepWatchApp(root)
         for _ in range(5):
@@ -78,7 +80,16 @@ def check_interface() -> None:
         _check(root.winfo_exists() and root.winfo_width() > 1, "fenêtre non dessinée")
         _check(app.shutdown(timeout=2), "arrêt de l'interface incomplet")
     finally:
-        root.destroy()
+        try:
+            if app is None:
+                root.__dict__.pop("report_callback_exception", None)
+                root.destroy()
+            else:
+                app.dispose()
+        finally:
+            # The caller can start another worker immediately after this check.
+            app = root = None
+            gc.collect()
 
 
 def run(write: Callable[[str], None] | None = None) -> int:

@@ -18,8 +18,10 @@ from PIL import Image, ImageTk
 
 from .display import WINDOW_CLASS
 from .engine import Recorder
+from .imaging import preview_image
 from .models import CaptureConfig, CaptureTarget, Rect
 from .platform import WindowsBackend
+from .review import SessionReview
 from .storage import SessionStore, export_markdown, export_standalone, import_sharex
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +72,8 @@ class StepWatchApp:
         self._close_error: str | None = None
         self._poll_id: str | None = None
         self._settings_widgets: list[tuple[tk.Widget, str]] = []
+        self._controls_key = None
+        self._last_state = "idle"
 
         self.name = tk.StringVar(value="Nouvelle intervention")
         self.output = tk.StringVar(value=str(Path.home() / "Documents" / "StepWatch"))
@@ -114,27 +118,41 @@ class StepWatchApp:
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
     def _style(self) -> None:
-        families = {family.casefold() for family in tkfont.families(self.root)}
-        self._ui_font = "Segoe UI" if "segoe ui" in families else "Helvetica"
-        self._mono_font = "Consolas" if "consolas" in families else "Courier"
+        families = {family.casefold(): family for family in tkfont.families(self.root)}
+        default = tkfont.nametofont("TkDefaultFont", root=self.root).actual("family")
+        fixed = tkfont.nametofont("TkFixedFont", root=self.root).actual("family")
+        self._ui_font = next((families[name] for name in ("segoe ui", "dejavu sans", "liberation sans")
+                              if name in families), default)
+        self._mono_font = next((families[name] for name in ("consolas", "dejavu sans mono", "liberation mono")
+                                if name in families), fixed)
         style = ttk.Style(self.root)
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        self.root.configure(bg="#eef2f7")
-        style.configure("TFrame", background="#eef2f7")
+        self.root.configure(bg="#eef4f5")
+        style.configure("TFrame", background="#eef4f5")
         style.configure("Card.TFrame", background="#ffffff")
-        style.configure("TLabel", background="#eef2f7", foreground="#17263c", font=(self._ui_font, 10))
+        style.configure("Header.TFrame", background="#132c39")
+        style.configure("TLabel", background="#eef4f5", foreground="#18333f", font=(self._ui_font, 10))
         style.configure("Card.TLabel", background="#ffffff")
+        style.configure("CardTitle.TLabel", background="#ffffff", font=(self._ui_font, 13, "bold"))
+        style.configure("CardMuted.TLabel", background="#ffffff", foreground="#536874")
         style.configure("Muted.TLabel", foreground="#53657b")
-        style.configure("Title.TLabel", font=(self._ui_font, 23, "bold"))
-        style.configure("Section.TLabel", font=(self._ui_font, 11, "bold"))
-        style.configure("Count.TLabel", background="#ffffff", font=(self._ui_font, 24, "bold"), foreground="#1459ac")
+        style.configure("Title.TLabel", background="#132c39", foreground="#ffffff", font=(self._ui_font, 19, "bold"))
+        style.configure("Status.TLabel", background="#132c39", foreground="#c5ebdf", font=(self._ui_font, 10, "bold"))
+        style.configure("Count.TLabel", background="#ffffff", font=(self._ui_font, 14, "bold"), foreground="#126c59")
         style.configure("TButton", font=(self._ui_font, 10), padding=(12, 7))
-        style.configure("Accent.TButton", background="#155eb9", foreground="#ffffff")
-        style.map("Accent.TButton", background=[("active", "#0e4d9d"), ("disabled", "#a8bad0")])
-        style.configure("TLabelframe", background="#eef2f7", padding=12)
-        style.configure("TLabelframe.Label", background="#eef2f7", foreground="#17263c", font=(self._ui_font, 10, "bold"))
-        style.configure("TCheckbutton", background="#eef2f7", font=(self._ui_font, 10))
+        style.configure("Accent.TButton", background="#147663", foreground="#ffffff")
+        style.map("Accent.TButton", background=[("disabled", "#bdd0cf"), ("active", "#0b594a")],
+                  foreground=[("disabled", "#3f5358")])
+        style.configure("TNotebook", background="#eef4f5", borderwidth=0)
+        style.configure("TNotebook.Tab", background="#e0ebed", foreground="#1d414d", padding=(18, 8),
+                        font=(self._ui_font, 10, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", "#ffffff")], foreground=[("selected", "#0b5e4d")])
+        style.configure("Treeview", rowheight=self._px(31), font=(self._ui_font, 10), borderwidth=0)
+        style.map("Treeview", background=[("selected", "#d5eee6")], foreground=[("selected", "#173b38")])
+        style.configure("TLabelframe", background="#eef4f5", padding=12)
+        style.configure("TLabelframe.Label", background="#eef4f5", foreground="#18333f", font=(self._ui_font, 10, "bold"))
+        style.configure("TCheckbutton", background="#eef4f5", font=(self._ui_font, 10))
         style.configure("TEntry", font=(self._ui_font, 10))
         style.configure("TCombobox", font=(self._ui_font, 10))
         style.configure("TEntry", padding=5)
@@ -147,25 +165,39 @@ class StepWatchApp:
         return widget
 
     def _build(self) -> None:
-        outer = ttk.Frame(self.root, padding=20)
+        outer = ttk.Frame(self.root, padding=16)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
 
-        heading = ttk.Frame(outer)
-        heading.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ttk.Label(heading, text="StepWatch", style="Title.TLabel").pack(side="left")
-        ttk.Label(heading, text="Documentez vos interventions, étape par étape.", style="Muted.TLabel").pack(side="left", padx=18)
-        self.import_button = ttk.Button(heading, text="Importer un dossier ShareX", command=self._import)
-        self.import_button.pack(side="right")
+        heading = ttk.Frame(outer, style="Header.TFrame", padding=(16, 10))
+        heading.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(heading, text="StepWatch", style="Title.TLabel").pack(side="left", padx=(0, 14))
+        ttk.Label(heading, textvariable=self.state_text, style="Status.TLabel").pack(side="left")
+        self.import_button = ttk.Button(heading, text="Importer ShareX", command=self._import)
+        self.import_button.pack(side="right", padx=(8, 0))
 
-        status = ttk.Frame(outer, style="Card.TFrame", padding=(14, 10))
-        status.grid(row=1, column=0, sticky="ew", pady=(0, 14))
-        ttk.Label(status, textvariable=self.state_text, style="Card.TLabel", font=(self._ui_font, 11, "bold")).pack(side="left")
-        ttk.Label(status, text="Local uniquement · aucune frappe clavier enregistrée", style="Card.TLabel").pack(side="right")
+        toolbar = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
+        toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        actions = ttk.Frame(toolbar, style="Card.TFrame")
+        actions.pack(side="left")
+        self.start_button = ttk.Button(actions, text="Démarrer", style="Accent.TButton", command=self._start)
+        self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
+        self.resume_button = ttk.Button(actions, text="Reprendre", command=self._resume, state="disabled")
+        self.stop_button = ttk.Button(actions, text="Arrêter", command=self._stop, state="disabled")
+        self.note_button = ttk.Button(actions, text="Ajouter une note", command=self._add_note, state="disabled")
+        for button in (self.start_button, self.pause_button, self.resume_button, self.stop_button, self.note_button):
+            button.pack(side="left", padx=(0, 6))
+        counts = ttk.Frame(toolbar, style="Card.TFrame")
+        counts.pack(side="right", padx=(8, 0))
+        for col, (label, variable) in enumerate((("Conservées", self.kept), ("Ignorées", self.ignored))):
+            ttk.Label(counts, textvariable=variable, style="Count.TLabel").grid(row=0, column=2 * col, padx=(6, 4))
+            ttk.Label(counts, text=label, style="CardMuted.TLabel").grid(row=0, column=2 * col + 1, padx=(0, 8))
 
-        body = ttk.Frame(outer)
-        body.grid(row=2, column=0, sticky="nsew")
+        self._tabs = ttk.Notebook(outer)
+        self._tabs.grid(row=2, column=0, sticky="nsew")
+        body = ttk.Frame(self._tabs, padding=(0, 12, 0, 0))
+        self._tabs.add(body, text="Capture")
         body.columnconfigure(0, weight=0, minsize=self._px(420))
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
@@ -174,7 +206,7 @@ class StepWatchApp:
         settings.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
         settings.rowconfigure(0, weight=1)
         settings.columnconfigure(0, weight=1)
-        settings_canvas = tk.Canvas(settings, bg="#eef2f7", highlightthickness=0, width=self._px(420))
+        settings_canvas = tk.Canvas(settings, bg="#eef4f5", highlightthickness=0, width=self._px(420))
         settings_canvas.grid(row=0, column=0, sticky="nsew")
         settings_scrollbar = ttk.Scrollbar(settings, orient="vertical", command=settings_canvas.yview)
         settings_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -235,58 +267,48 @@ class StepWatchApp:
         right = ttk.Frame(body)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(2, weight=3)
-        right.rowconfigure(4, weight=1)
-
-        actions = ttk.Frame(right)
-        actions.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        self.start_button = ttk.Button(actions, text="Démarrer", style="Accent.TButton", command=self._start)
-        self.start_button.pack(side="left", padx=(0, 6))
-        self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
-        self.pause_button.pack(side="left", padx=(0, 6))
-        self.resume_button = ttk.Button(actions, text="Reprendre", command=self._resume, state="disabled")
-        self.resume_button.pack(side="left", padx=(0, 6))
-        self.stop_button = ttk.Button(actions, text="Arrêter", command=self._stop, state="disabled")
-        self.stop_button.pack(side="left", padx=(0, 6))
-        self.note_button = ttk.Button(actions, text="Ajouter une note", command=self._add_note, state="disabled")
-        self.note_button.pack(side="left")
-
-        counts = ttk.Frame(right, style="Card.TFrame", padding=(16, 8))
-        counts.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        for col, (label, variable) in enumerate((("Captures conservées", self.kept), ("Captures ignorées", self.ignored))):
-            counts.columnconfigure(col, weight=1)
-            ttk.Label(counts, text=label, style="Card.TLabel").grid(row=0, column=col, sticky="w")
-            ttk.Label(counts, textvariable=variable, style="Count.TLabel").grid(row=1, column=col, sticky="w")
-
-        preview = ttk.LabelFrame(right, text="Dernière capture conservée")
-        preview.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        right.rowconfigure(0, weight=1)
+        preview = ttk.Frame(right, style="Card.TFrame", padding=14)
+        preview.grid(row=0, column=0, sticky="nsew")
         preview.columnconfigure(0, weight=1)
-        preview.rowconfigure(0, weight=1)
-        # width/height 1 : la taille demandée ne dépend pas de l’image affichée,
-        # sinon chaque nouvelle miniature relance <Configure> et un redessin.
-        self.preview = tk.Label(preview, text="L’aperçu apparaîtra après la première capture.", bg="#142238", fg="#d7e2ef", font=(self._ui_font, 10), anchor="center", width=1, height=1)
-        self.preview.grid(row=0, column=0, sticky="nsew")
+        preview.rowconfigure(1, weight=1)
+        ttk.Label(preview, text="Dernière capture", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
+        # The image must not determine the label's requested size.
+        empty_preview = ("L’aperçu apparaîtra après la première capture." if sys.platform == "win32"
+                         else "Importez un dossier ShareX pour le consulter dans Étapes.")
+        self.preview = tk.Label(preview, text=empty_preview,
+                                bg="#132432", fg="#d9e9ee", font=(self._ui_font, 10), width=1, height=1)
+        self.preview.grid(row=1, column=0, sticky="nsew")
         self.preview.bind("<Configure>", self._draw_preview)
 
-        session = ttk.Frame(right)
-        session.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        self._review = SessionReview(self._tabs, choose_session=self._choose_session,
+                                     on_loaded=self._use_session, on_error=self._review_error, font=self._ui_font)
+        self._tabs.add(self._review, text="Étapes")
+        self._tabs.bind("<<NotebookTabChanged>>", self._tab_changed)
+
+        log_frame = ttk.Frame(self._tabs, padding=(0, 12, 0, 0))
+        log_frame.rowconfigure(0, weight=1)
+        log_frame.columnconfigure(0, weight=1)
+        self.log = scrolledtext.ScrolledText(log_frame, height=5, state="disabled", wrap="word",
+                                             font=(self._mono_font, 9), relief="flat", bg="#ffffff", fg="#253b54")
+        self.log.grid(row=0, column=0, sticky="nsew")
+        self._tabs.add(log_frame, text="Journal")
+
+        session = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
+        session.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         session.columnconfigure(0, weight=1)
-        ttk.Label(session, textvariable=self.session_text, style="Muted.TLabel", wraplength=self._px(430)).grid(row=0, column=0, sticky="w")
+        location = ttk.Label(session, textvariable=self.session_text, style="CardMuted.TLabel", width=1)
+        location.grid(row=0, column=0, sticky="ew", padx=(4, 6))
+        location.bind("<Configure>", lambda event: location.configure(wraplength=max(1, event.width - 6)))
         self.open_button = ttk.Button(session, text="Ouvrir le dossier", command=self._open_session, state="disabled")
         self.open_button.grid(row=0, column=1, padx=(6, 0))
         self.export_button = ttk.Button(session, text="Rapport autonome", command=self._export_standalone, state="disabled")
         self.export_button.grid(row=0, column=2, padx=(6, 0))
 
-        log_frame = ttk.LabelFrame(right, text="Journal")
-        log_frame.grid(row=4, column=0, sticky="nsew")
-        log_frame.rowconfigure(0, weight=1)
-        log_frame.columnconfigure(0, weight=1)
-        self.log = scrolledtext.ScrolledText(log_frame, height=5, state="disabled", wrap="word", font=(self._mono_font, 9), relief="flat", bg="#ffffff", fg="#253b54")
-        self.log.grid(row=0, column=0, sticky="nsew")
-        footer = "Windows : les fenêtres doivent rester visibles et non recouvertes. Les masques sont appliqués avant l’enregistrement."
+        footer = "Les fenêtres capturées doivent rester visibles. Les masques sont appliqués avant l’enregistrement."
         if sys.platform != "win32":
-            footer = "Capture native disponible sous Windows. L’import ShareX et les rapports restent utilisables ici."
-        ttk.Label(outer, text=footer, style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=(12, 0))
+            footer = "Import ShareX, relecture et rapports disponibles. La capture nécessite Windows."
+        ttk.Label(outer, text=footer, style="Muted.TLabel", wraplength=self._px(840)).grid(row=4, column=0, sticky="w", pady=(8, 0))
 
     def _write_log(self, message: str, level: int | None = logging.INFO) -> None:
         """Ajoute une ligne au journal de l’interface et, si level, au journal de diagnostic."""
@@ -330,6 +352,34 @@ class StepWatchApp:
         selected = filedialog.askdirectory(parent=self.root, title="Dossier des interventions", initialdir=self.output.get() if Path(self.output.get()).is_dir() else None)
         if selected:
             self.output.set(selected)
+
+    def _choose_session(self) -> None:
+        if self._active() or self._background_running() or self._closing:
+            return
+        selected = filedialog.askdirectory(parent=self.root, title="Choisir un dossier contenant steps.json")
+        if selected:
+            self._review.load(Path(selected))
+            self._update_controls()
+
+    def _use_session(self, directory: Path) -> None:
+        self._session_dir = directory
+        self.session_text.set(str(directory))
+
+    def _review_error(self, message: str) -> None:
+        self._write_log(f"Relecture impossible : {message}", level=logging.WARNING)
+        if not self._closing:
+            messagebox.showerror("Relecture impossible", message, parent=self.root)
+
+    def _show_review(self) -> None:
+        if self._session_dir is None or self._closing or self._active():
+            return
+        if not self._review.busy and self._review.directory != self._session_dir:
+            self._review.load(self._session_dir)
+        self._tabs.select(self._review)
+
+    def _tab_changed(self, _event) -> None:
+        if self._tabs.select() == str(self._review):
+            self._show_review()
 
     @staticmethod
     def _number(value: str, label: str) -> float:
@@ -415,13 +465,14 @@ class StepWatchApp:
             store = SessionStore(output, self.name.get().strip())
             recorder = Recorder(target, config, store)
             self._recorder = recorder
-            self._session_dir = store.directory
-            self.session_text.set(str(store.directory))
-            self.open_button.configure(state="normal")
+            self._review.clear()
+            self._tabs.select(0)
+            self._use_session(store.directory)
             self.kept.set("0")
             self.ignored.set("0")
             self._last_image = None
             self._photo = None
+            self._preview_key = None
             self.preview.configure(image="", text="En attente de la première capture…")
             recorder.start()
             self._write_log(f"Intervention : {self.name.get().strip()} — {target.label}")
@@ -474,19 +525,29 @@ class StepWatchApp:
             self._write_log(f"Note non ajoutée : {exc}")
 
     def _background_running(self) -> bool:
-        return any(thread is not None and thread.is_alive()
-                   for thread in (self._import_thread, self._export_thread))
+        return self._review.busy or any(thread is not None and thread.is_alive()
+                                        for thread in (self._import_thread, self._export_thread))
 
     def _update_controls(self) -> None:
         state = self._recorder.state if self._recorder is not None else "idle"
-        active = self._active()
+        active = state in {"recording", "paused", "stopping"}
         busy = self._closing or self._background_running()
-        self.start_button.configure(state="disabled" if active or busy else "normal")
+        if (self._last_state in {"recording", "paused", "stopping"} and state == "stopped"
+                and not self._closing):
+            self._show_review()
+            busy = self._background_running()
+        self._last_state = state
+        key = state, busy, self._closing, self._session_dir, self.source.get()
+        if key == self._controls_key:
+            return
+        self.start_button.configure(state="disabled" if active or busy or sys.platform != "win32" else "normal")
         self.pause_button.configure(state="normal" if state == "recording" and not self._closing else "disabled")
         self.resume_button.configure(state="normal" if state == "paused" and not self._closing else "disabled")
         self.stop_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
         self.note_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
         self.import_button.configure(state="disabled" if active or busy else "normal")
+        self._review.open_button.configure(state="disabled" if active or busy else "normal")
+        self.open_button.configure(state="normal" if self._session_dir is not None else "disabled")
         exportable = self._session_dir is not None and not active and not busy
         self.export_button.configure(state="normal" if exportable else "disabled")
         for widget, normal_state in self._settings_widgets:
@@ -503,6 +564,7 @@ class StepWatchApp:
             self.state_text.set("Export du rapport autonome en cours…")
         else:
             self.state_text.set(self.STATE_NAMES.get(state, state))
+        self._controls_key = key
 
     def _draw_preview(self, _event: tk.Event | None = None) -> None:
         if self._last_image is None:
@@ -511,8 +573,7 @@ class StepWatchApp:
         previous = self._preview_key
         if previous is not None and previous[0] is self._last_image and previous[1:] == (width, height):
             return  # Même image, même taille : rien à recalculer.
-        preview = self._last_image.copy()
-        preview.thumbnail((width, height), Image.Resampling.LANCZOS)
+        preview = preview_image(self._last_image, (width, height))
         self._photo = ImageTk.PhotoImage(preview, master=self.root)
         self._preview_key = (self._last_image, width, height)
         self.preview.configure(image=self._photo, text="")
@@ -527,16 +588,17 @@ class StepWatchApp:
             self._draw_preview()
         message = event.get("message", "")
         if message:
-            # Les comparaisons ignorées (une par intervalle) restent hors du fichier.
+            if event.get("type") == "ignored" and message.startswith("Variation visuelle ignorée"):
+                LOGGER.debug(message)  # The count already shows routine discarded samples.
+                return
             level = {"error": logging.WARNING, "ignored": logging.DEBUG}.get(event.get("type"), logging.INFO)
             self._write_log(str(message), level=level)
 
     def _handle_background_event(self, event: dict) -> None:
         if event["type"] == "import_done":
-            self._session_dir = Path(event["directory"])
-            self.session_text.set(str(self._session_dir))
-            self.open_button.configure(state="normal")
+            self._use_session(Path(event["directory"]))
             self._write_log(f"Import terminé. Sources préservées. Rapport : {self._session_dir}")
+            self._show_review()
         elif event["type"] == "export_done":
             size = event["size"] / 1_000_000
             self._write_log(f"Rapport autonome : {event['path']} ({size:.1f} Mo). Il contient "
@@ -577,6 +639,8 @@ class StepWatchApp:
             pass
 
     def _poll(self) -> None:
+        if self._disposed:
+            return
         try:
             # Une seule boucle de suivi, même si _poll est appelé directement.
             if self._poll_id is not None:
@@ -585,13 +649,16 @@ class StepWatchApp:
             if self._recorder is not None:
                 self._drain(self._recorder.events, 100, self._handle_event)
             self._drain(self._background_events, 30, self._handle_background_event)
+            self._review.poll()
             self._update_controls()
         except Exception as exc:
             self._report_ui_error(exc)
         finally:
             # Toujours reprogrammer : sinon l’interface se fige et la file du
             # moteur grossit sans fin avec les aperçus des captures.
-            self._poll_id = self.root.after(100, self._poll)
+            if not self._disposed:
+                delay = 100 if self._closing or self._active() or self._background_running() else 300
+                self._poll_id = self.root.after(delay, self._poll)
 
     def _import(self) -> None:
         if self._active() or self._closing or self._background_running():
@@ -691,6 +758,10 @@ class StepWatchApp:
                 if worker.is_alive():
                     complete = False
                     LOGGER.warning("Le traitement %s est encore actif ; les ressources Tk sont conservées.", worker.name)
+        review = getattr(self, "_review", None)
+        if review is not None and not review.shutdown(max(0, deadline - time.monotonic())):
+            complete = False
+            LOGGER.warning("La lecture de la capture est encore active.")
         return complete
 
     def dispose(self) -> None:
@@ -705,6 +776,9 @@ class StepWatchApp:
             return
         if threading.get_ident() != getattr(self, "_ui_thread", threading.get_ident()):
             raise RuntimeError("Les ressources Tk doivent être libérées sur le thread de l’interface.")
+        review = getattr(self, "_review", None)
+        if review is not None and not review.shutdown():
+            raise RuntimeError("La lecture de la capture est encore active.")
         callback = self.root.__dict__.get("report_callback_exception")
         if getattr(callback, "__self__", None) is self:
             del self.root.report_callback_exception

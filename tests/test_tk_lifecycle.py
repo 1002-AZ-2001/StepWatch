@@ -29,6 +29,7 @@ class TkLifecycleTests(unittest.TestCase):
 
             sys.path.insert(0, str(Path.cwd() / 'tests'))
             from test_ui import UITests
+            from stepwatch.selftest import check_interface
 
             gc.disable()
             case = UITests('test_constructor_does_not_record')
@@ -38,6 +39,7 @@ class TkLifecycleTests(unittest.TestCase):
             case.tearDown()
             if root_ref() is not None or app_ref() is not None:
                 raise RuntimeError('GUI cleanup retained the destroyed Tcl interpreter')
+            check_interface()
             worker = threading.Thread(target=gc.collect, name='post-GUI-collection')
             worker.start()
             worker.join(timeout=5)

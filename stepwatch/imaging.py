@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import math
 from typing import Iterable, TYPE_CHECKING
 
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
 #: first bounds the cost and is itself a low-pass filter against ClearType
 #: fringes and dithering. Conservative mode keeps full resolution.
 ANALYSIS_MAX_PIXELS = 500_000
+_NORMAL_THRESHOLD = tuple(255 if value >= 22 else 0 for value in range(256))
+_CONSERVATIVE_THRESHOLD = tuple(255 if value >= 8 else 0 for value in range(256))
 
 
 def analysis_factor(size: tuple[int, int], max_pixels: int = ANALYSIS_MAX_PIXELS) -> int:
@@ -22,7 +25,21 @@ def analysis_factor(size: tuple[int, int], max_pixels: int = ANALYSIS_MAX_PIXELS
     width, height = size
     if width * height <= max_pixels:
         return 1
-    return math.ceil(math.sqrt(width * height / max_pixels))
+    factor = math.ceil(math.sqrt(width * height / max_pixels))
+    # Account for rounding up in Image.reduce(), even on very narrow regions.
+    while math.ceil(width / factor) * math.ceil(height / factor) > max_pixels:
+        factor += 1
+    return factor
+
+
+def paint_masks(image: Image.Image, masks: Iterable[Rect]) -> None:
+    """Redact an owned RGB image in place."""
+    for mask in masks:
+        left, top = max(0, mask.left), max(0, mask.top)
+        right = min(image.width, mask.left + mask.width)
+        bottom = min(image.height, mask.top + mask.height)
+        if left < right and top < bottom:
+            image.paste((0, 0, 0), (left, top, right, bottom))
 
 
 def apply_masks(image: Image.Image, masks: Iterable[Rect]) -> Image.Image:
@@ -32,31 +49,103 @@ def apply_masks(image: Image.Image, masks: Iterable[Rect]) -> Image.Image:
     outside a resized target are clipped, rather than exposing an unmasked copy.
     """
     result = image.convert("RGB")  # Always a new image, even for RGB input.
-    drawing = ImageDraw.Draw(result)
-    for mask in masks:
-        left, top = max(0, mask.left), max(0, mask.top)
-        right = min(result.width, mask.left + mask.width)
-        bottom = min(result.height, mask.top + mask.height)
-        if left < right and top < bottom:
-            drawing.rectangle((left, top, right - 1, bottom - 1), fill="black")
+    paint_masks(result, masks)
     return result
 
 
-def mark_click(image: Image.Image, click: tuple[int, int] | None) -> Image.Image:
-    """Add a visible local-click ring without modifying the source image."""
-    result = image.convert("RGB")
-    if click is None:
-        return result
+def paint_click(image: Image.Image, click: tuple[int, int]) -> None:
+    """Draw the local-click marker on an owned image."""
     x, y = click
-    if not (0 <= x < result.width and 0 <= y < result.height):
-        return result
-    drawing = ImageDraw.Draw(result)
+    if not (0 <= x < image.width and 0 <= y < image.height):
+        return
+    drawing = ImageDraw.Draw(image)
     radius = 14
     bounds = (x - radius, y - radius, x + radius, y + radius)
     drawing.ellipse(bounds, outline="white", width=5)
     drawing.ellipse(bounds, outline="#e34435", width=3)
     drawing.ellipse((x - 2, y - 2, x + 2, y + 2), fill="#e34435")
+
+
+def mark_click(image: Image.Image, click: tuple[int, int] | None) -> Image.Image:
+    """Add a visible local-click ring without modifying the source image."""
+    result = image.convert("RGB")
+    if click is not None:
+        paint_click(result, click)
     return result
+
+
+def preview_image(image: Image.Image, limit: tuple[int, int]) -> Image.Image:
+    """Scale down without copying the full image or enlarging a small capture."""
+    scale = min(1.0, limit[0] / image.width, limit[1] / image.height)
+    if scale == 1.0:
+        return image
+    size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+    return image.resize(size, Image.Resampling.BILINEAR, reducing_gap=2.0)
+
+
+@dataclass(slots=True)
+class VisualSample:
+    size: tuple[int, int]
+    pixels: Image.Image
+    _filtered: Image.Image | None = field(default=None, init=False)
+
+    def filtered(self) -> Image.Image:
+        if self._filtered is None:
+            self._filtered = self.pixels.filter(ImageFilter.MedianFilter(3)).filter(ImageFilter.GaussianBlur(0.65))
+        return self._filtered
+
+
+class VisualComparator:
+    """Compare with the last kept frame, reusing its reduced and filtered pixels.
+
+    Inputs and accepted samples are treated as read-only. The regular mode
+    retains only the analysis resolution. Conservative mode uses full-resolution
+    pixels but counts differences in strips to bound scratch memory.
+    """
+
+    def __init__(self, conservative: bool = False):
+        self.conservative = conservative
+        self.reference: VisualSample | None = None
+
+    def prepare(self, image: Image.Image) -> VisualSample:
+        pixels = image if image.mode == "RGB" else image.convert("RGB")
+        if not self.conservative:
+            factor = analysis_factor(image.size)
+            if factor > 1:
+                pixels = pixels.reduce(factor)
+        return VisualSample(image.size, pixels)
+
+    def compare(self, sample: VisualSample) -> float:
+        reference = self.reference
+        if reference is None or reference.size != sample.size:
+            return 100.0
+        before, after = reference.pixels, sample.pixels
+        pixels = after.width * after.height
+        if not pixels:
+            return 0.0
+        if self.conservative:
+            rows = max(1, ANALYSIS_MAX_PIXELS // after.width)
+            changed = 0
+            for top in range(0, after.height, rows):
+                if rows >= after.height:
+                    diff = ImageChops.difference(before, after)
+                else:
+                    box = (0, top, after.width, min(top + rows, after.height))
+                    diff = ImageChops.difference(before.crop(box), after.crop(box))
+                if diff.getbbox():
+                    changed += _changed_mask(diff, _CONSERVATIVE_THRESHOLD).histogram()[255]
+            return 100.0 * changed / pixels
+
+        if ImageChops.difference(before, after).getbbox() is None:
+            return 0.0  # Static desktop: no median or Gaussian filters needed.
+        diff = ImageChops.difference(reference.filtered(), sample.filtered())
+        mask = _changed_mask(diff, _NORMAL_THRESHOLD).filter(ImageFilter.MedianFilter(3))
+        return 100.0 * mask.histogram()[255] / pixels
+
+
+def _changed_mask(diff: Image.Image, threshold: tuple[int, ...]) -> Image.Image:
+    red, green, blue = diff.split()
+    return ImageChops.lighter(ImageChops.lighter(red, green), blue).point(threshold)
 
 
 def changed_percent(
@@ -77,23 +166,6 @@ def changed_percent(
     """
     if previous is None or previous.size != current.size:
         return 100.0
-    before = previous if previous.mode == "RGB" else previous.convert("RGB")
-    after = current if current.mode == "RGB" else current.convert("RGB")
-    if not conservative:
-        factor = analysis_factor(after.size)
-        if factor > 1:
-            before, after = before.reduce(factor), after.reduce(factor)
-        before = before.filter(ImageFilter.MedianFilter(3)).filter(ImageFilter.GaussianBlur(0.65))
-        after = after.filter(ImageFilter.MedianFilter(3)).filter(ImageFilter.GaussianBlur(0.65))
-    diff = ImageChops.difference(before, after)
-    red, green, blue = diff.split()
-    largest_channel = ImageChops.lighter(ImageChops.lighter(red, green), blue)
-    threshold = 8 if conservative else 22
-    changed = largest_channel.point(lambda value: 255 if value >= threshold else 0)
-    if not conservative:
-        changed = changed.filter(ImageFilter.MedianFilter(3))
-    # The proportion is measured on the analysed (possibly reduced) image.
-    pixels = changed.width * changed.height
-    if pixels == 0:
-        return 0.0
-    return 100.0 * changed.histogram()[255] / pixels
+    comparator = VisualComparator(conservative)
+    comparator.reference = comparator.prepare(previous)
+    return comparator.compare(comparator.prepare(current))

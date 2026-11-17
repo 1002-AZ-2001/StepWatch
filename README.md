@@ -58,9 +58,10 @@ py -3.12 -m venv .venv
 3. Choisissez un mode : **Hybride** (clics locaux et changements visuels), **Clics uniquement** ou **Changements visuels uniquement**.
 4. Réglez le délai après clic, l'intervalle de comparaison et le seuil. Le seuil est une proportion de pixels modifiés : plus il est bas, plus StepWatch garde d'étapes. Le mode conservateur détecte les petits changements.
 5. Ajoutez si besoin des masques, un par ligne : `x,y,largeur,hauteur`, relatifs au coin supérieur gauche de la capture. Cliquez sur **Démarrer** ; rien n'est capturé avant.
-6. Utilisez **Pause**, **Reprendre** et **Arrêter**. L'aperçu, les compteurs et le journal montrent les captures gardées, les comparaisons ignorées et les erreurs.
+6. Utilisez **Pause**, **Reprendre** et **Arrêter** dans la barre de capture. Les compteurs affichent les images gardées et ignorées. L'onglet **Journal** affiche les événements et les erreurs.
 7. **Ajouter une note** attache un texte libre à la dernière étape, pendant l'enregistrement ou la pause.
-8. Après l'arrêt, **Ouvrir le dossier** affiche la session et **Rapport autonome** produit un fichier HTML unique à joindre à un ticket.
+8. Après l'arrêt, l'onglet **Étapes** affiche la session dans l'ordre des captures. Sélectionnez une ligne pour voir son image, son heure et ses notes. **Ouvrir une session** permet de relire un dossier existant qui contient `steps.json`.
+9. **Ouvrir le dossier** donne accès aux fichiers et **Rapport autonome** produit un HTML à joindre à un ticket.
 
 Un double-clic ou un triple-clic donne une seule étape « Double-clic local », capturée après le dernier appui. Pour AnyDesk, TeamViewer ou RDP, sélectionnez la fenêtre locale du logiciel de télémaintenance. Une action du client distant devient un « changement visuel détecté » : StepWatch ne connaît pas la position de son clic, et les marqueurs ne montrent que les clics locaux.
 
@@ -78,7 +79,7 @@ Chaque intervention a son propre dossier :
 | `rapport.md` | Même rapport en Markdown, pour un wiki ou un ticket ; mêmes liens vers `captures/`. |
 | `rapport-autonome.html` | Créé par **Rapport autonome** : un seul fichier, captures intégrées (environ +33 % de taille). |
 
-**Importer un dossier ShareX** copie les images d'un dossier, sans ses sous-dossiers, dans une nouvelle intervention. Elles sont classées par date de modification, puis par nom. Les sources ne sont jamais modifiées. Les masques ne s'appliquent pas à l'import.
+**Importer ShareX** copie les images d'un dossier, sans ses sous-dossiers, dans une nouvelle intervention et ouvre la vue **Étapes**. Elles sont classées par date de modification, puis par nom. Les sources ne sont jamais modifiées. Les masques ne s'appliquent pas à l'import.
 
 Les captures peuvent contenir des données confidentielles. Choisissez un dossier adapté et gérez sa protection et sa conservation. Un dossier synchronisé (OneDrive, partage sauvegardé dans le cloud…) enverrait les captures hors du poste. Les masques restent fixes par rapport à la capture et ne détectent pas les mots de passe : n'affichez pas de données sensibles hors des zones masquées.
 
@@ -111,7 +112,7 @@ Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/
 DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Les images de ce README proviennent d'une exécution réelle sous Linux, sur des captures synthétiques : l'interface après un import ShareX, et un rapport produit par le code de stockage de StepWatch.
+Les images du README montrent la relecture et un rapport générés sous Linux à partir de captures synthétiques. Le parcours qui sépare capture et relecture s'inspire d'[OpenSteps](https://github.com/ebanez8/openstep).
 
 Licence : [GNU AGPL v3](LICENSE).
 

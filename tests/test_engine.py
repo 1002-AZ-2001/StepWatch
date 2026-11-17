@@ -185,7 +185,7 @@ class RecorderTests(unittest.TestCase):
 
     def test_click_captures_do_not_run_the_visual_comparison(self):
         self.make_recorder(mode="clicks", click_delay=0)
-        with patch("stepwatch.engine.changed_percent",
+        with patch("stepwatch.engine.VisualComparator",
                    side_effect=AssertionError("comparaison inutile")) as compare:
             listener = self.start()
             listener.click()
@@ -597,6 +597,34 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(self.store.steps, [])
         self.assertTrue(self.backend.closed)
         self.assertEqual(self.recorder.state, "stopped")
+
+    def test_capture_overlaps_a_blocked_writer_and_stop_drains_only_submitted_frames(self):
+        self.make_recorder(mode="clicks", click_delay=0)
+        writing, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        real_save = self.store.save
+        writes = []
+
+        def slow_save(*args, **kwargs):
+            writes.append(threading.get_ident())
+            writing.set()
+            if not release.wait(3):
+                raise RuntimeError("Test writer was not released")
+            return real_save(*args, **kwargs)
+
+        with patch.object(self.store, "save", side_effect=slow_save):
+            listener = self.start()
+            listener.click(x=-10)
+            self.assertTrue(writing.wait(2))
+            listener.click(x=4)
+            self.wait_for(lambda: len(self.backend.grab_times) == 2)
+            self.assertNotEqual(self.backend.owner, writes[0])
+            self.assertEqual(len(writes), 1)  # A second image was acquired without another submitted write.
+            self.assertFalse(self.recorder.stop(timeout=.01))
+            release.set()
+            self.assertTrue(self.recorder.stop())
+        self.assertEqual([step["click"] for step in self.store.steps], [[10, 10]])
+        self.assertEqual(len(self.saved_events()), 1)
 
     def test_stop_without_start_writes_valid_empty_report(self):
         self.make_recorder()

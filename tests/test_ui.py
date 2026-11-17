@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import Mock, patch
@@ -20,6 +21,7 @@ from unittest.mock import Mock, patch
 from PIL import Image, ImageTk
 
 from stepwatch.models import CaptureTarget, Rect
+from stepwatch.review import PAGE_SIZE
 from stepwatch.storage import ReportWriteError, SessionStore, StorageError
 from stepwatch.ui import StepWatchApp, run_app
 
@@ -183,6 +185,40 @@ class UITests(unittest.TestCase):
         self.assertIsNotNone(self.app._photo)
         self.assertTrue(self.app.preview["image"])
         self.assertIn("Capture de test", self.app.log.get("1.0", "end"))
+
+    def test_reopen_session_pages_metadata_and_reads_only_selected_images(self):
+        store = SessionStore(Path(self.temp.name), "Guide de test")
+        first = store.save(Image.new("RGB", (320, 200), "red"), "initial", annotation="Première étape")
+        last = store.save(Image.new("RGB", (320, 200), "blue"), "local_click", annotation="Étape suivante")
+        manifest = store.directory / "steps.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["steps"] = [dict(first, index=i + 1) for i in range(PAGE_SIZE)] + [dict(last, index=PAGE_SIZE + 1)]
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+
+        def wait_image(color):
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline:
+                self.root.update()
+                self.app._poll()
+                image = self.app._review._image
+                if image is not None and image.getpixel((0, 0)) == color:
+                    return
+                time.sleep(.01)
+            self.fail("L’aperçu de l’étape sélectionnée n’a pas été chargé.")
+
+        self.app._tabs.select(self.app._review)
+        with patch("stepwatch.ui.filedialog.askdirectory", return_value=str(store.directory)), \
+                patch("stepwatch.review.Image.open", wraps=Image.open) as opened:
+            self.app._choose_session()
+            wait_image((255, 0, 0))
+            self.assertEqual(len(self.app._review.list.get_children()), PAGE_SIZE)
+            self.assertEqual(self.app._session_dir, store.directory)
+            self.assertIn("Première étape", self.app._review.annotation.get("1.0", "end"))
+            self.app._review.next.invoke()
+            wait_image((0, 0, 255))
+            self.assertEqual(len(self.app._review.list.get_children()), 1)
+            self.assertEqual(opened.call_count, 2)
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8")), data)
 
     def test_failing_event_is_logged_and_polling_continues(self):
         recorder = Mock(state="recording", events=queue.Queue())

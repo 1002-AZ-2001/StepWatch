@@ -49,7 +49,6 @@ Ces chantiers touchent les API Windows : la CI les compile et les simule, mais s
 | --- | --- | --- | --- |
 | Capture d'une fenêtre recouverte | `PrintWindow` avec `PW_RENDERFULLCONTENT` (Windows 8.1+) pour ne plus capturer une fenêtre superposée, avec repli sur la copie d'écran actuelle. | Moyen. | Option non documentée : image noire possible pour certains contenus (DirectX, protégés). L'API documentée `Windows.Graphics.Capture` est plus robuste, mais plus lourde à intégrer depuis Python. |
 | Masques ancrés | Un masque suit un bord ou un coin de la fenêtre quand elle est redimensionnée. | Faible à moyen. | Ne suit pas un champ qui se déplace à l'intérieur de la fenêtre. |
-| Écriture dans un thread dédié | L'encodage PNG ne retarde plus la boucle de capture sur les très grandes cibles. | Moyen. | Ordre des étapes et remontée des erreurs à préserver ; utile surtout en 4K. |
 
 ## Version 1.0 proposée — diffusion
 

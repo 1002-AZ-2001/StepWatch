@@ -60,6 +60,17 @@ Vérifiez le bilan du runner : un test graphique ignoré faute d'affichage ne co
 
 ## Mesures
 
+### Enregistrement 4K et traitement en parallèle
+
+Comparaison avec la version 0.4.0 (`5f1c912`) dans le même environnement Linux, sur un bureau synthétique de 3 840 × 2 160 pixels. Le moteur fonctionne en mode visuel avec un intervalle de 100 ms, un backend simulé et de vraies écritures PNG, JSON et HTML. Chaque scénario est mesuré dans un processus séparé. Le pic mémoire inclut le processus entier et son image de test.
+
+| Scénario | Temps CPU avant → après | Pic mémoire avant → après | Durée avant → après |
+| --- | ---: | ---: | ---: |
+| 20 images identiques, 1 capture conservée | 2,42 → 0,58 s | 228 → 118 Mio | 3,28 → 1,95 s |
+| 20 captures conservées avec changement de zone | 5,62 → 3,98 s | 260 → 156 Mio | 5,68 → 2,88 s |
+
+Dans le second scénario, le temps CPU dépasse la durée réelle après modification. L'analyse et l'écriture ont avancé en parallèle. Le nouveau moteur a également préparé une image supplémentaire qu'il a écartée à l'arrêt. Les mesures concernent ce scénario de test et varient selon les images, le processeur et le disque du poste.
+
 ### Encodage PNG (version 0.3.0)
 
 Pillow utilise par défaut le niveau zlib 6. Sur des images 1080p de test, sous Linux :

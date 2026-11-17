@@ -62,7 +62,8 @@ py -3.12 -m venv .venv
 5. Add masks if needed, one per line: `x,y,width,height`, relative to the top-left corner of the capture. Click **Démarrer** (Start); nothing is captured before that.
 6. Use **Pause**, **Reprendre** (Resume) and **Arrêter** (Stop). The preview, counters and log show kept screenshots, ignored comparisons and errors.
 7. **Ajouter une note** (Add a note) attaches free text to the latest step, while recording or paused.
-8. After stopping, **Ouvrir le dossier** (Open folder) shows the session, and **Rapport autonome** (Standalone report) produces a single HTML file to attach to a ticket.
+8. After stopping, use **Étapes** (Steps) to review each screenshot, timestamp, and note. **Ouvrir une session** (Open session) reopens an existing folder with `steps.json`.
+9. **Ouvrir le dossier** (Open folder) shows the session files. **Rapport autonome** (Standalone report) produces a single HTML file you can attach to a ticket.
 
 A double-click or triple-click becomes a single "local double-click" step, captured after the last press. For AnyDesk, TeamViewer or RDP, select the local window of the remote support software. An action by the remote client becomes a "visual change detected": StepWatch cannot know where that click happened, and markers only show local clicks.
 
@@ -80,7 +81,7 @@ Each session has its own folder:
 | `rapport.md` | The same report in Markdown, for a wiki or a ticket, with the same links to `captures/`. |
 | `rapport-autonome.html` | Created by **Rapport autonome**: one file with embedded screenshots (about 33 % larger). |
 
-**Importer un dossier ShareX** (Import a ShareX folder) copies the images of a folder, without its subfolders, into a new session. They are sorted by modification date, then by name. Source files are never modified. Masks do not apply to imports.
+**Importer ShareX** (Import ShareX) copies the images of a folder into a new session and opens **Étapes**. It sorts the files by modification date and name, and leaves the original images in place. Masks apply to recordings only.
 
 Screenshots may contain confidential data. Choose a suitable folder and manage its protection and retention. A synchronised folder (OneDrive, a share backed up to the cloud…) would send the screenshots off the workstation. Masks stay fixed relative to the capture and do not detect passwords: do not display sensitive data outside masked areas.
 

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
-from stepwatch.imaging import (ANALYSIS_MAX_PIXELS, analysis_factor, apply_masks,
+from stepwatch.imaging import (ANALYSIS_MAX_PIXELS, VisualComparator, analysis_factor, apply_masks,
                                changed_percent, mark_click)
 
 
@@ -66,8 +66,10 @@ class ImagingTests(unittest.TestCase):
             return original_filter(image, *args, **kwargs)
 
         frame = Image.new("RGB", (1920, 1080), "white")
+        changed = frame.copy()
+        ImageDraw.Draw(changed).rectangle((100, 100, 500, 500), fill="black")
         with patch.object(Image.Image, "filter", spy):
-            changed_percent(frame, frame.copy())
+            changed_percent(frame, changed)
         self.assertTrue(filtered_sizes)
         self.assertTrue(all(w * h <= ANALYSIS_MAX_PIXELS for w, h in filtered_sizes))
 
@@ -83,6 +85,25 @@ class ImagingTests(unittest.TestCase):
         self.assertLess(changed_percent(before, caret), 0.05)
         # Conservative mode stays at full resolution for small changes.
         self.assertGreater(changed_percent(before, caret, conservative=True), 0)
+
+    def test_static_samples_skip_filters_and_changes_reuse_the_reference(self):
+        frame = Image.new("RGB", (160, 110), "white")
+        comparator = VisualComparator()
+        comparator.reference = comparator.prepare(frame)
+        with patch.object(Image.Image, "filter", side_effect=AssertionError("Filtre inutile")):
+            self.assertEqual(comparator.compare(comparator.prepare(frame.copy())), 0)
+        changed = Image.new("RGB", frame.size, "black")
+        self.assertEqual(comparator.compare(comparator.prepare(changed)), 100)
+        reference = comparator.reference
+        with patch.object(reference.pixels, "filter", side_effect=AssertionError("Référence recalculée")):
+            self.assertEqual(comparator.compare(comparator.prepare(changed)), 100)
+
+    def test_conservative_comparison_counts_changed_pixels_across_strips(self):
+        image = Image.new("RGB", (150, 100), (30, 30, 30))
+        changed = image.copy()
+        ImageDraw.Draw(changed).rectangle((0, 18, 149, 68), fill=(30, 38, 30))
+        with patch("stepwatch.imaging.ANALYSIS_MAX_PIXELS", 300):
+            self.assertAlmostEqual(changed_percent(image, changed, conservative=True), 51)
 
     def test_mask_clips_to_image_and_leaves_source_unchanged(self):
         image = Image.new("RGB", (10, 10), "white")

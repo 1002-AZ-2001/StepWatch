@@ -12,7 +12,7 @@ import time
 import unicodedata
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -43,7 +43,7 @@ _REPLACE_DELAY = 0.05  # Doubled after each failed attempt: 1.55 s at most.
 
 #: zlib level for captures. Pillow defaults to 6; on 1080p desktop-like and
 #: noisy test images, level 3 encoded 23-63 % faster and produced 5-20 %
-#: smaller files. Encoding runs on the capture thread, so speed matters.
+#: smaller files. Fast encoding reduces contention with the capture thread.
 PNG_COMPRESS_LEVEL = 3
 
 
@@ -148,7 +148,8 @@ class SessionStore:
                 dir=destination.parent, prefix=".stepwatch-", suffix=".tmp", delete=False,
             ) as handle:
                 temporary = Path(handle.name)
-                image.convert("RGB").save(handle, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
+                pixels = image if image.mode == "RGB" else image.convert("RGB")
+                pixels.save(handle, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
                 handle.flush()
                 os.fsync(handle.fileno())
             _replace(temporary, destination)
@@ -278,11 +279,15 @@ def _report_head(name: str, started_at: str, count: int, standalone: bool = Fals
     )
 
 
-def _report_article(step: dict[str, Any], source: str, link: bool = True) -> str:
+def step_trigger_label(step: dict[str, Any]) -> str:
     trigger = _TRIGGER_LABELS.get(step["trigger"], step["trigger"])
     count = step.get("click_count", 1)
     if step["trigger"] in ("click", "local_click") and count > 1:
         trigger = {2: "Double-clic local", 3: "Triple-clic local"}.get(count, f"{count} clics locaux")
+    return trigger
+
+
+def _report_details(step: dict[str, Any]) -> str:
     annotation = (
         f'<p class="annotation">{html.escape(step["annotation"])}</p>'
         if step["annotation"] else ""
@@ -293,16 +298,18 @@ def _report_article(step: dict[str, Any], source: str, link: bool = True) -> str
         if step["click"] is not None else ""
     )
     index = html.escape(str(step["index"]))
-    src = html.escape(source, quote=True)
-    image = f'<img src="{src}" alt="Capture de l’étape {index}" loading="lazy">'
-    if link:
-        # Not for data: URIs, which browsers refuse to open as a page.
-        image = f'<a href="{src}">{image}</a>'
     return (
-        f'<article><h2>Étape {index} — {html.escape(trigger)}</h2>'
+        f'<article><h2>Étape {index} — {html.escape(step_trigger_label(step))}</h2>'
         f'<time datetime="{html.escape(step["timestamp"], quote=True)}">'
-        f'{html.escape(_local_time(step["timestamp"]))}</time>{annotation}{click}{image}</article>'
+        f'{html.escape(_local_time(step["timestamp"]))}</time>{annotation}{click}'
     )
+
+
+def _report_article(step: dict[str, Any], source: str) -> str:
+    index = html.escape(str(step["index"]))
+    src = html.escape(source, quote=True)
+    return (_report_details(step) + f'<a href="{src}"><img src="{src}" '
+            f'alt="Capture de l’étape {index}" loading="lazy"></a></article>')
 
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -342,10 +349,7 @@ def _markdown(name: str, started_at: str, steps: list[dict[str, Any]]) -> str:
              f"Rapport StepWatch · {len(steps)} capture(s) · début : "
              f"{_markdown_text(_local_time(started_at))} (heure locale du poste)", ""]
     for step in steps:
-        trigger = _TRIGGER_LABELS.get(step["trigger"], step["trigger"])
-        count = step.get("click_count", 1)
-        if step["trigger"] in ("click", "local_click") and count > 1:
-            trigger = {2: "Double-clic local", 3: "Triple-clic local"}.get(count, f"{count} clics locaux")
+        trigger = step_trigger_label(step)
         index = int(step["index"])
         lines += [f"## Étape {index} — {_markdown_text(trigger)}", "",
                   f"*{_markdown_text(_local_time(step['timestamp']))}*", ""]
@@ -365,7 +369,7 @@ def _markdown(name: str, started_at: str, steps: list[dict[str, Any]]) -> str:
 def export_markdown(directory: Path) -> Path:
     """(Re)write rapport.md of any session folder from its steps.json."""
     directory = Path(directory)
-    name, started_at, steps = _read_steps(directory)
+    name, started_at, steps = read_session(directory)
     destination = directory / MARKDOWN_REPORT
     try:
         _atomic_text(destination, _markdown(name, started_at, steps))
@@ -374,7 +378,7 @@ def export_markdown(directory: Path) -> Path:
     return destination
 
 
-def _read_steps(directory: Path) -> tuple[str, str, list[dict[str, Any]]]:
+def read_session(directory: Path) -> tuple[str, str, list[dict[str, Any]]]:
     """Name, start and normalised steps of a session folder's steps.json."""
     path = directory / "steps.json"
     try:
@@ -394,12 +398,12 @@ def _read_steps(directory: Path) -> tuple[str, str, list[dict[str, Any]]]:
                 "annotation": str(step.get("annotation") or ""),
             })
         return str(metadata.get("name") or "Intervention"), str(metadata.get("started_at", "")), steps
-    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
         raise StorageError(f"Lecture de {path} impossible : {exc}") from exc
 
 
-def _embedded_png(directory: Path, step: dict[str, Any]) -> str:
-    """data: URI of a step's capture; only PNG files directly in captures/."""
+def capture_path(directory: Path, step: dict[str, Any]) -> Path:
+    """Locate a step's PNG without following links outside its session."""
     parts = _capture_parts(step)
     # Resolving *both* captures/ and the image and comparing only their parents
     # would accept a captures/ symlink/junction pointing outside the session.
@@ -415,12 +419,27 @@ def _embedded_png(directory: Path, step: dict[str, Any]) -> str:
             raise StorageError(f"Étape {step['index']} : image hors du dossier captures/ refusée.")
         if not path.is_file():
             raise OSError("le fichier PNG est absent ou n'est pas un fichier ordinaire")
-        data = path.read_bytes()
     except OSError as exc:
         raise StorageError(f"Étape {step['index']} : capture illisible ({exc}).") from exc
-    if not data.startswith(_PNG_SIGNATURE):
-        raise StorageError(f"Étape {step['index']} : {path.name} n'est pas une image PNG.")
-    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+    return path
+
+
+def _write_standalone_article(handle: TextIO, directory: Path, step: dict[str, Any]) -> None:
+    path = capture_path(directory, step)
+    try:
+        with path.open("rb") as image:
+            if image.read(len(_PNG_SIGNATURE)) != _PNG_SIGNATURE:
+                raise StorageError(f"Étape {step['index']} : {path.name} n'est pas une image PNG.")
+            image.seek(0)
+            handle.write(_report_details(step))
+            handle.write('<img src="data:image/png;base64,')
+            # Chunks aligned to three bytes produce one continuous data URI.
+            while chunk := image.read(96 * 1024):
+                handle.write(base64.b64encode(chunk).decode("ascii"))
+    except OSError as exc:
+        raise StorageError(f"Étape {step['index']} : export de la capture impossible ({exc}).") from exc
+    index = html.escape(str(step["index"]))
+    handle.write(f'" alt="Capture de l’étape {index}" loading="lazy"></article>\n')
 
 
 def export_standalone(directory: Path) -> Path:
@@ -431,7 +450,7 @@ def export_standalone(directory: Path) -> Path:
     atomically and contains every capture, like the session folder itself.
     """
     directory = Path(directory)
-    name, started_at, steps = _read_steps(directory)
+    name, started_at, steps = read_session(directory)
     destination = directory / STANDALONE_REPORT
     temporary: Path | None = None
     try:
@@ -442,8 +461,7 @@ def export_standalone(directory: Path) -> Path:
             temporary = Path(handle.name)
             handle.write(_report_head(name, started_at, len(steps), standalone=True))
             for step in steps:
-                handle.write(_report_article(step, _embedded_png(directory, step), link=False))
-                handle.write("\n")
+                _write_standalone_article(handle, directory, step)
             handle.write(_REPORT_TAIL)
             handle.flush()
             os.fsync(handle.fileno())
