@@ -1,6 +1,6 @@
 """Browse a local guide without loading its whole collection of images."""
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
@@ -220,12 +220,10 @@ class SessionReview(ttk.Frame):
     def shutdown(self, timeout=0):
         self._pending = None
         if self._running is not None:
-            try:
-                self._running[3].result(timeout=max(0, timeout))
-            except TimeoutError:
+            # Wait for completion without consuming the result. An I/O error
+            # raised by the worker does not mean it is still running.
+            if wait((self._running[3],), timeout=max(0, timeout)).not_done:
                 return False
-            except Exception:
-                pass  # The requested review has been abandoned on shutdown.
             self._running = None
         self._executor.shutdown(wait=True)
         return True

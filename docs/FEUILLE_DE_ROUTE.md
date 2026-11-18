@@ -2,6 +2,10 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 0.6 — enregistrement sous Linux
+
+StepWatch capture les clics et les changements visuels sous X11. Sous Wayland, le partage passe par le portail du bureau et PipeWire pour suivre les changements visuels. Cette version réduit aussi les copies d'images et la mémoire utilisée par l'import ShareX. [Validation et mesures](validation.md)
+
 ## Version 0.5 — relecture et performances
 
 La vue **Étapes** rouvre une session et charge seulement l'image sélectionnée. La capture et l'écriture PNG s'exécutent en parallèle. Le correctif de fermeture Tk évite que le nettoyage des objets graphiques soit effectué par un thread de travail.
@@ -15,7 +19,7 @@ La vue **Étapes** rouvre une session et charge seulement l'image sélectionnée
 | Wayland | Fonctionnement par XWayland vérifié dans weston ; message explicite sans XWayland ; icône associée dans les docks. | Tk n'a pas de backend Wayland natif : XWayland reste nécessaire. |
 | Auto-test | `stepwatch --self-test` vérifie une installation sans données personnelles. | — |
 
-Sous Linux, l'application reste limitée à l'import ShareX et aux rapports.
+Cette version ouvrait l'interface sous Linux pour l'import ShareX et la consultation des rapports.
 
 ## Version 0.3 — publication et fiabilité du hook (livrée)
 
@@ -42,9 +46,9 @@ Un rapport est fait pour être transmis. Ce chantier traite le risque principal 
 | --- | --- | --- | --- |
 | Éditeur de session après l'arrêt | Supprimer une étape inutile, corriger ou compléter une annotation, ajouter une note à n'importe quelle étape. Rapports régénérés. | Moyen : nouvelle fenêtre Tk, réécriture de `steps.json`. | Une étape supprimée doit-elle garder son PNG d'origine ? À décider ; proposition : déplacement dans `captures/retirees/`, exclu des rapports. |
 | Masquage a posteriori | Noircir à la souris une zone oubliée sur une capture déjà enregistrée, avant partage. | Moyen : dessin sur l'image dans l'éditeur. | Écrase définitivement les pixels du PNG ; le rapport autonome existant doit être régénéré. |
-| Masques dessinés avant l'enregistrement | Dessiner les zones sur un aperçu de la cible au lieu de saisir `x,y,largeur,hauteur`. | Moyen. | L'aperçu nécessite une capture de la cible, donc Windows pour l'essai réel. |
+| Masques dessinés avant l'enregistrement | Dessiner les zones sur un aperçu de la cible au lieu de saisir `x,y,largeur,hauteur`. | Moyen. | L'aperçu nécessite l'accès à la cible avant l'enregistrement. |
 
-## Version 0.6 proposée — capture plus fiable
+## À venir — capture plus fiable
 
 Ces chantiers touchent les API Windows : la CI les compile et les simule, mais seul un essai sur un poste réel les valide.
 
@@ -62,14 +66,14 @@ Ces chantiers touchent les API Windows : la CI les compile et les simule, mais s
 | Installeur | Paquet MSI ou `winget`, avec raccourci et désinstallation propre. | Signature recommandée au préalable. |
 | Interface en anglais | Le README existe déjà en anglais ; l'interface reste en français. | Extraction des textes de `ui.py`, `engine.py` et `storage.py`. |
 
-## À étudier : enregistrer sous Linux
+## Enregistrement sous Linux
 
-L'enregistrement repose aujourd'hui sur des API Windows (hook souris bas niveau, fenêtres Win32). Sous Linux, deux cas sont très différents :
+StepWatch utilise le moteur de capture de la session de bureau.
 
-- **Session X11** : la capture d'écran (`mss`) et l'observation des clics (`pynput`, par l'extension XRecord) sont possibles. Un enregistrement complet, clics compris, est envisageable.
-- **Session Wayland** : par conception, une application ne peut ni observer les clics des autres applications, ni capturer l'écran librement. Seuls les portails XDG permettent la capture : `Screenshot`, ou `ScreenCast` avec un flux PipeWire, après l'accord de l'utilisateur dans une fenêtre du bureau. Le portail `InputCapture` sert aux barrières de pointeur (partage clavier-souris) et n'observe pas les clics. Un enregistrement Wayland serait donc limité au mode **changements visuels**, sans marqueur de clic.
+- **X11** utilise `mss` pour les images et `python-xlib` pour les cibles et les clics via l'extension RECORD.
+- **Wayland** utilise le portail ScreenCast et PipeWire pour les changements visuels de la source partagée par l'utilisateur. La fenêtre Tk s'affiche via XWayland.
 
-Ce chantier demande de nouvelles dépendances (D-Bus, PipeWire ou GStreamer) et des essais sur plusieurs bureaux (GNOME, KDE, wlroots). Il n'est pas planifié.
+Les sources proposées par le portail dépendent du bureau. [Dépendances Linux et mise en route](distribution.md#wayland)
 
 ## Idées non retenues pour l'instant
 

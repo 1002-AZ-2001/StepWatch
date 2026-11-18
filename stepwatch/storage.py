@@ -10,11 +10,13 @@ import re
 import tempfile
 import time
 import unicodedata
+import zlib
+from collections.abc import Iterator
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, BinaryIO, TextIO
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps
 
 
 class StorageError(RuntimeError):
@@ -177,7 +179,8 @@ class SessionStore:
             "started_at": self.started_at,
             "steps": self.steps,
         }
-        _atomic_text(self.directory / "steps.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+        encoded = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
+        _atomic_text(self.directory / "steps.json", encoded)
         _atomic_text(self.directory / "rapport.html", self._html())
 
     def add_note(self, text: str) -> dict[str, Any]:
@@ -313,6 +316,7 @@ def _report_article(step: dict[str, Any], source: str) -> str:
 
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_BLOCK_BYTES = 96 * 1024
 STANDALONE_REPORT = "rapport-autonome.html"
 MARKDOWN_REPORT = "rapport.md"
 NOTE_MAX_LENGTH = 2000
@@ -424,20 +428,63 @@ def capture_path(directory: Path, step: dict[str, Any]) -> Path:
     return path
 
 
+def _png_blocks(image: BinaryIO) -> Iterator[bytes]:
+    """Stream the PNG structure and check chunk lengths and CRCs without decoding pixels."""
+    signature = image.read(len(_PNG_SIGNATURE))
+    if signature != _PNG_SIGNATURE:
+        raise ValueError("signature incorrecte")
+    yield signature
+
+    first = True
+    has_data = False
+    while True:
+        header = image.read(8)
+        if len(header) != 8:
+            raise ValueError("bloc PNG manquant ou tronqué")
+        size = int.from_bytes(header[:4], "big")
+        kind = header[4:]
+        if first and (kind != b"IHDR" or size != 13):
+            raise ValueError("en-tête IHDR incorrect")
+        first = False
+        checksum = zlib.crc32(kind)
+        yield header
+        remaining = size
+        while remaining:
+            block = image.read(min(remaining, _PNG_BLOCK_BYTES))
+            if not block:
+                raise ValueError("données PNG tronquées")
+            checksum = zlib.crc32(block, checksum)
+            remaining -= len(block)
+            yield block
+        crc = image.read(4)
+        if len(crc) != 4 or checksum != int.from_bytes(crc, "big"):
+            raise ValueError("somme de contrôle PNG incorrecte")
+        yield crc
+        has_data = has_data or kind == b"IDAT"
+        if kind == b"IEND":
+            if size or not has_data or image.read(1):
+                raise ValueError("fin de fichier PNG incorrecte")
+            return
+
+
 def _write_standalone_article(handle: TextIO, directory: Path, step: dict[str, Any]) -> None:
     path = capture_path(directory, step)
     try:
         with path.open("rb") as image:
-            if image.read(len(_PNG_SIGNATURE)) != _PNG_SIGNATURE:
-                raise StorageError(f"Étape {step['index']} : {path.name} n'est pas une image PNG.")
-            image.seek(0)
             handle.write(_report_details(step))
             handle.write('<img src="data:image/png;base64,')
-            # Chunks aligned to three bytes produce one continuous data URI.
-            while chunk := image.read(96 * 1024):
-                handle.write(base64.b64encode(chunk).decode("ascii"))
+            # Carry at most two bytes across blocks to pad only at the end.
+            tail = b""
+            for block in _png_blocks(image):
+                block = tail + block
+                end = len(block) - len(block) % 3
+                handle.write(base64.b64encode(memoryview(block)[:end]).decode("ascii"))
+                tail = block[end:]
+            handle.write(base64.b64encode(tail).decode("ascii"))
     except OSError as exc:
         raise StorageError(f"Étape {step['index']} : export de la capture impossible ({exc}).") from exc
+    except ValueError as exc:
+        raise StorageError(f"Étape {step['index']} : {path.name} n'est pas une image PNG valide ({exc}).") from exc
     index = html.escape(str(step["index"]))
     handle.write(f'" alt="Capture de l’étape {index}" loading="lazy"></article>\n')
 
@@ -495,22 +542,20 @@ def import_sharex(
     if not files:
         raise ValueError("Ce dossier ne contient aucune image PNG, JPEG, BMP ou WebP.")
     store = SessionStore(Path(output_dir), name)
-    try:
-        for source in files:
-            try:
-                timestamp = datetime.fromtimestamp(source.stat().st_mtime, timezone.utc)
-                with Image.open(source) as original:
-                    image = ImageOps.exif_transpose(original).convert("RGB")
-                    image.load()
-                store.save(image, "import_sharex", annotation=f"Source : {source.name}", timestamp=timestamp)
-            except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
-                raise StorageError(
-                    f"Import interrompu pour {source.name} : {exc}. "
-                    f"Les captures déjà importées sont conservées dans {store.directory}."
-                ) from exc
-        store.close()
-    except StorageError:
-        # Every successful save already persists its metadata; source files and
-        # partial output are deliberately retained for inspection/recovery.
-        raise
+    for source in files:
+        try:
+            timestamp = datetime.fromtimestamp(source.stat().st_mtime, timezone.utc)
+            with Image.open(source) as image:
+                ImageOps.exif_transpose(image, in_place=True)
+                try:
+                    store.save(image, "import_sharex", annotation=f"Source : {source.name}", timestamp=timestamp)
+                except ReportWriteError:
+                    # The PNG and step already exist, so retry only the reports.
+                    store.close()
+        except (OSError, ValueError, StorageError, Image.DecompressionBombError) as exc:
+            raise StorageError(
+                f"Import interrompu pour {source.name} : {exc}. "
+                f"Les captures déjà importées sont conservées dans {store.directory}."
+            ) from exc
+    store.close()
     return store.directory

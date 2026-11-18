@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publier la version de main après les tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -98,7 +103,10 @@ jobs:
     timeout-minutes: 30
     env:
       STEPWATCH_GUI_TESTS: '1'
+      STEPWATCH_X11_TESTS: '1'
+      STEPWATCH_GSTREAMER_TESTS: '1'
       DISPLAY: ':99'
+      XDG_SESSION_TYPE: x11
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,7 +128,9 @@ jobs:
       - name: Installer les outils système
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q xvfb x11-utils dpkg-dev
+          sudo apt-get install -y -q xvfb x11-utils dpkg-dev python3-gi \
+            gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+            gstreamer1.0-plugins-base gstreamer1.0-pipewire
 
       - name: Installer les dépendances Python
         run: |
@@ -156,9 +166,11 @@ jobs:
       - name: Ubuntu 22.04 (X11) — installer le paquet, lancement et auto-test
         run: |
           sudo apt-get install -y -q ./dist/stepwatch_${{ steps.metadata.outputs.version }}_amd64.deb
+          test -r /opt/stepwatch/_internal/stepwatch/_wayland_portal.py
           .venv/bin/python scripts/smoke_linux_bundle.py /opt/stepwatch/StepWatch
           stepwatch --self-test | tee selftest.log
           grep -q "Interface Tk : OK" selftest.log
+          grep -q "Capture X11 : OK" selftest.log
 
       - name: Ubuntu 22.04 (Wayland, weston + XWayland) — auto-test
         run: |
@@ -185,6 +197,7 @@ jobs:
             sleep 2
             DISPLAY=:42 stepwatch --self-test | tee /tmp/selftest.log
             grep -q "Interface Tk : OK" /tmp/selftest.log
+            grep -q "Capture X11 : OK" /tmp/selftest.log
             apt-get remove -y -q stepwatch
             test ! -e /opt/stepwatch
           '
@@ -199,6 +212,7 @@ jobs:
             sleep 2
             DISPLAY=:42 stepwatch --self-test | tee /tmp/selftest.log
             grep -q "Interface Tk : OK" /tmp/selftest.log
+            grep -q "Capture X11 : OK" /tmp/selftest.log
             python /scripts/smoke_wayland.py /usr/bin/stepwatch
             pacman -R --noconfirm stepwatch
             test ! -e /opt/stepwatch
@@ -219,15 +233,14 @@ jobs:
           retention-days: 30
 
   release:
-    # One GitHub release per version: merging a new pyproject.toml version
-    # into main publishes it (the tag is created here); pushing a matching
-    # v* tag works too. A version already published is never replaced from
-    # main, so ordinary merges do not touch existing releases.
+    # A new version on main publishes automatically. A manual run on main
+    # can request the same publication after rebuilding and testing.
     name: Publier la version
     needs: [windows, linux]
     if: >-
-      github.event_name == 'push' &&
-      (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+      (github.event_name == 'push' &&
+        (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -281,7 +294,7 @@ jobs:
           RELEASE_TAG: ${{ steps.notes.outputs.tag }}
         run: |
           set -euo pipefail
-          ls -l release-assets
+          (cd release-assets && sha256sum --check SHA256SUMS-windows.txt SHA256SUMS-linux.txt)
           title="StepWatch $RELEASE_TAG — Windows, Debian et Arch Linux"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             # Only reachable from a tag push: refresh that version's files.

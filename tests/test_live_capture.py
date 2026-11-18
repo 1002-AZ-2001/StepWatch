@@ -1,4 +1,4 @@
-"""Opt-in end-to-end MSS capture on a Linux virtual display, without Win32 hooks."""
+"""Opt-in end-to-end X11 capture on a Linux virtual display."""
 import json
 import gc
 import os
@@ -11,16 +11,19 @@ import sys
 
 from PIL import Image
 
+from stepwatch.display import session_type
 from stepwatch.engine import Recorder
 from stepwatch.models import CaptureConfig, CaptureTarget, Rect
 from stepwatch.storage import SessionStore
+from stepwatch.x11 import X11Backend
 
 
 @unittest.skipUnless(sys.platform.startswith("linux")
-                     and os.environ.get("STEPWATCH_GUI_TESTS") == "1" and os.environ.get("DISPLAY"),
-                     "Capture réelle Linux : affichage virtuel et STEPWATCH_GUI_TESTS=1 requis.")
+                     and os.environ.get("STEPWATCH_GUI_TESTS") == "1" and os.environ.get("DISPLAY")
+                     and session_type() == "x11",
+                     "Capture réelle Linux : affichage X11 et STEPWATCH_GUI_TESTS=1 requis.")
 class LiveCaptureTests(unittest.TestCase):
-    def test_visible_pixels_flow_through_mss_redaction_and_offline_export(self):
+    def test_visible_pixels_flow_through_x11_redaction_and_offline_export(self):
         root = tk.Tk()
         recorder = None
         try:
@@ -29,10 +32,11 @@ class LiveCaptureTests(unittest.TestCase):
             root.configure(bg="#ffffff")
             root.update()
             with tempfile.TemporaryDirectory() as temporary:
-                store = SessionStore(Path(temporary), "Test réel Linux MSS")
+                store = SessionStore(Path(temporary), "Test réel Linux X11")
                 recorder = Recorder(CaptureTarget("region", "Fenêtre de test", Rect(100, 100, 400, 300)),
                                     CaptureConfig(mode="visual", interval=.1,
                                                   masks=(Rect(10, 10, 40, 40),)), store)
+                self.assertIs(recorder._backend_factory, X11Backend)
                 recorder.start()
 
                 def wait_for_count(count):

@@ -3,8 +3,9 @@
 from pathlib import Path
 import tempfile
 import unittest
+from xml.etree import ElementTree
 
-from scripts.ci_metadata import version_for_build
+from scripts.ci_metadata import ROOT, version_for_build
 
 
 class CIMetadataTests(unittest.TestCase):
@@ -30,6 +31,11 @@ class CIMetadataTests(unittest.TestCase):
         import stepwatch
         self.assertEqual(stepwatch.__version__, version_for_build())
 
+    def test_windows_manifest_version_matches_pyproject(self):
+        manifest = ElementTree.parse(ROOT / "scripts" / "StepWatch.manifest")
+        identity = manifest.find("{urn:schemas-microsoft-com:asm.v1}assemblyIdentity")
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity.get("version"), f"{version_for_build()}.0")
 
 
 if __name__ == "__main__":

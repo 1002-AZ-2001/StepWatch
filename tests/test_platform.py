@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 from stepwatch.models import CaptureConfig, CaptureTarget, Rect
-from stepwatch.platform import (CaptureUnavailable, WindowsBackend, double_click_settings,
-                                enable_dpi_awareness)
+from stepwatch.platform import (CaptureUnavailable, WindowsBackend, capture_backend_factory,
+                                double_click_settings, enable_dpi_awareness)
 
 
 class FakeMSS:
@@ -19,7 +19,7 @@ class FakeMSS:
     def grab(self, rectangle):
         self.requests.append(rectangle)
         # Real MSS screenshots expose native BGRA pixels (red, then green).
-        return SimpleNamespace(size=(2, 1), bgra=b"\x00\x00\xff\xff\x00\xff\x00\xff")
+        return SimpleNamespace(size=(2, 1), raw=bytearray(b"\x00\x00\xff\xff\x00\xff\x00\xff"))
 
     def close(self):
         self.closed = True
@@ -44,6 +44,11 @@ class FakeWindows:
 
 
 class GeometryTests(unittest.TestCase):
+    def test_portal_target_lets_the_desktop_decide_which_pixels_to_capture(self):
+        self.assertIsNone(CaptureTarget("portal", "Partage de l'écran").rect)
+        with self.assertRaises(ValueError):
+            CaptureTarget("portal", "Partage de l'écran", rect=Rect(0, 0, 50, 50))
+
     def test_mss_dictionaries_and_objects_both_supported(self):
         data = dict(left=-1920, top=-80, width=1920, height=1080)
         self.assertEqual(Rect.from_any(data), Rect.from_any(SimpleNamespace(**data)))
@@ -214,6 +219,23 @@ class BackendTests(unittest.TestCase):
         self.assertFalse(enable_dpi_awareness())
         with self.assertRaisesRegex(CaptureUnavailable, "Windows"):
             WindowsBackend().list_windows()
+
+
+class BackendSelectionTests(unittest.TestCase):
+    def test_only_true_x11_sessions_select_the_x11_capture_backend(self):
+        from stepwatch.wayland import WaylandBackend
+        from stepwatch.x11 import X11Backend
+
+        self.assertIs(capture_backend_factory("win32", {}), WindowsBackend)
+        self.assertIs(capture_backend_factory("linux", {"DISPLAY": ":0"}), X11Backend)
+        self.assertIs(capture_backend_factory("linux", {
+            "DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland",
+        }), WaylandBackend)
+        self.assertIs(capture_backend_factory("linux", {
+            "DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "x11",
+        }), WaylandBackend)
+        self.assertIsNone(capture_backend_factory("linux", {"WAYLAND_DISPLAY": "wayland-0"}))
+        self.assertIsNone(capture_backend_factory("darwin", {"DISPLAY": ":0"}))
 
 
 if __name__ == "__main__":

@@ -2,22 +2,30 @@
 
 *[English version](README.en.md)*
 
-StepWatch documente une intervention informatique étape par étape, à partir des pixels visibles sur le poste Windows du technicien. Chaque clic local ou changement visuel devient une capture annotée. Le rapport HTML se consulte hors ligne. Captures et rapports restent sur le poste : aucun agent n'est installé chez le client, et rien n'est envoyé sur Internet.
+StepWatch documente une intervention informatique avec des captures automatiques, des notes et un rapport consultable hors ligne. Il s'installe sur le poste du technicien pour suivre une intervention locale ou une session de télémaintenance.
 
-StepWatch utilise Python, Tkinter, Pillow, `mss` et `pynput`. Aucune frappe clavier n'est enregistrée. Les zones sensibles peuvent être masquées avant l'écriture des images. Microsoft a déprécié l'Enregistreur d'actions de Windows (`psr.exe`) : StepWatch en est une alternative locale, pensée pour la télémaintenance.
+Masquez les zones sensibles avant l'enregistrement, puis utilisez l'onglet **Étapes** pour relire l'intervention et exporter un rapport HTML autonome ou Markdown. Les captures et les rapports restent sur le poste.
 
-![Interface de StepWatch sous Linux après l'import de captures synthétiques](docs/stepwatch.png)
+[Télécharger la dernière version](https://github.com/1002-AZ-2001/StepWatch/releases/latest) · [Enregistrer une intervention](#enregistrer-une-intervention)
+
+| Système | Capture |
+| --- | --- |
+| Windows 10/11 | Clics locaux et changements visuels d'une fenêtre, d'un moniteur ou d'une zone. |
+| Linux X11 | Clics locaux et changements visuels d'une fenêtre visible, d'un moniteur ou d'une zone. |
+| Linux Wayland | Changements visuels de l'écran ou de la fenêtre partagée dans le portail du bureau. L'interface s'affiche via XWayland. [Composants Wayland](docs/distribution.md#wayland) |
+
+![Relecture d'une intervention de démonstration enregistrée sous X11](docs/stepwatch.png)
 
 ## Télécharger
 
-Les exécutables sont dans les [Releases](https://github.com/1002-AZ-2001/StepWatch/releases). La [dernière version](https://github.com/1002-AZ-2001/StepWatch/releases/latest) propose :
+La dernière Release fournit les exécutables Windows, les paquets Linux et leurs sommes de contrôle. [Releases GitHub](https://github.com/1002-AZ-2001/StepWatch/releases)
 
 | Fichier | Pour |
 | --- | --- |
-| `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 : un seul fichier, sans installation. |
-| `StepWatch-VERSION-windows-x64-portable.zip` | Windows : dossier portable, à extraire en entier. |
-| `stepwatch_VERSION_amd64.deb` | Debian 12+ et Ubuntu 22.04+ : import ShareX et rapports uniquement. |
-| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux : import ShareX et rapports uniquement. |
+| `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, exécutable sans installation. |
+| `StepWatch-VERSION-windows-x64-portable.zip` | Windows x64, dossier portable à extraire en entier. |
+| `stepwatch_VERSION_amd64.deb` | Debian 12+ et Ubuntu 22.04+. |
+| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux. |
 | `SHA256SUMS-*.txt` | Vérification des téléchargements. |
 
 Python est inclus. Les exécutables Windows ne sont pas encore signés : SmartScreen peut afficher un avertissement, donc vérifiez d'abord le SHA-256. Les commandes d'installation et de vérification, ainsi que la construction depuis les sources, sont dans le [guide de distribution](docs/distribution.md).
@@ -31,8 +39,6 @@ sudo pacman -U ./stepwatch-VERSION-1-x86_64.pkg.tar.zst
 stepwatch
 stepwatch --self-test
 ```
-
-**L'enregistrement nécessite Windows.** Sous Linux, l'interface propose seulement l'import ShareX et les rapports, en session X11 comme en session **Wayland**. Sous Wayland, StepWatch s'affiche par XWayland, présent par défaut sur la plupart des bureaux : voir le [guide de distribution](docs/distribution.md#wayland).
 
 ### Depuis les sources, sous Windows
 
@@ -51,19 +57,29 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m stepwatch
 ```
 
+### Depuis les sources, sous Linux
+
+Utilisez Python 3.11 ou ultérieur avec venv et Tkinter. En session Wayland, installez aussi les composants de capture du bureau. [Guide de distribution Linux](docs/distribution.md#linux--debian-ubuntu-et-arch-linux)
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m stepwatch
+```
+
 ## Enregistrer une intervention
 
 1. Saisissez un nom et choisissez le dossier des rapports.
-2. Sélectionnez une fenêtre, un moniteur ou une zone. **Actualiser** recharge la liste. Les coordonnées sont en pixels physiques ; un écran placé à gauche peut avoir une origine négative.
-3. Choisissez un mode : **Hybride** (clics locaux et changements visuels), **Clics uniquement** ou **Changements visuels uniquement**.
-4. Réglez le délai après clic, l'intervalle de comparaison et le seuil. Le seuil est une proportion de pixels modifiés : plus il est bas, plus StepWatch garde d'étapes. Le mode conservateur détecte les petits changements.
-5. Ajoutez si besoin des masques, un par ligne : `x,y,largeur,hauteur`, relatifs au coin supérieur gauche de la capture. Cliquez sur **Démarrer** ; rien n'est capturé avant.
+2. Sous Windows et X11, sélectionnez une fenêtre, un moniteur ou une zone. **Actualiser** recharge la liste. Les coordonnées sont en pixels physiques et l'origine d'un écran placé à gauche peut être négative.
+3. Choisissez le mode **Hybride** (clics locaux et changements visuels), **Clics uniquement** ou **Changements visuels uniquement**. En session Wayland, le mode changements visuels est sélectionné.
+4. Réglez l'intervalle de comparaison, le seuil et le délai après clic si ce mode est utilisé. Plus le seuil est bas, plus StepWatch garde d'étapes. Le mode conservateur détecte les petits changements.
+5. Si besoin, ajoutez un masque par ligne au format `x,y,largeur,hauteur`, relatif au coin supérieur gauche de la capture. Cliquez sur **Démarrer**. Sous Wayland, choisissez la source dans le sélecteur du bureau et autorisez le partage.
 6. Utilisez **Pause**, **Reprendre** et **Arrêter** dans la barre de capture. Les compteurs affichent les images gardées et ignorées. L'onglet **Journal** affiche les événements et les erreurs.
 7. **Ajouter une note** attache un texte libre à la dernière étape, pendant l'enregistrement ou la pause.
 8. Après l'arrêt, l'onglet **Étapes** affiche la session dans l'ordre des captures. Sélectionnez une ligne pour voir son image, son heure et ses notes. **Ouvrir une session** permet de relire un dossier existant qui contient `steps.json`.
 9. **Ouvrir le dossier** donne accès aux fichiers et **Rapport autonome** produit un HTML à joindre à un ticket.
 
-Un double-clic ou un triple-clic donne une seule étape « Double-clic local », capturée après le dernier appui. Pour AnyDesk, TeamViewer ou RDP, sélectionnez la fenêtre locale du logiciel de télémaintenance. Une action du client distant devient un « changement visuel détecté » : StepWatch ne connaît pas la position de son clic, et les marqueurs ne montrent que les clics locaux.
+Le moteur regroupe les appuis rapprochés en une étape « Double-clic local ». Un second appui reçu après la capture de la première étape peut produire une autre étape. Pour AnyDesk, TeamViewer ou RDP, sélectionnez la fenêtre locale du logiciel de télémaintenance. Une action du client distant peut produire une étape « Changement visuel détecté ». Les marqueurs indiquent les clics locaux.
 
 ## Captures et rapports
 
@@ -85,12 +101,13 @@ Les captures peuvent contenir des données confidentielles. Choisissez un dossie
 
 Si un antivirus ou un outil de synchronisation verrouille brièvement un fichier, l'écriture est réessayée. Si le rapport reste verrouillé, le PNG est conservé et l'enregistrement continue ; le rapport est réécrit à la capture suivante et à l'arrêt.
 
-## Limites de la capture Windows
+## Limites de la capture
 
-- La capture prend les pixels du bureau visible : gardez la fenêtre cible dégagée, sinon une fenêtre superposée apparaît dans l'image.
+- Sous Windows et X11, gardez la fenêtre cible dégagée. Les fenêtres qui la recouvrent peuvent apparaître dans la capture.
+- Quand StepWatch reste visible sur un écran entier partagé, la mise à jour de son aperçu peut déclencher une nouvelle capture.
 - Un clic n'est rattaché à la cible que s'il tombe sur elle ou sur un dialogue qu'elle possède.
 - Une fenêtre fermée, réduite ou invisible produit une erreur explicite dans le journal.
-- Le bureau sécurisé UAC, les contenus protégés et les fenêtres élevées peuvent empêcher la capture ou la réception des clics.
+- Sous Windows, le bureau sécurisé UAC, les contenus protégés et les fenêtres élevées peuvent empêcher la capture ou la réception des clics.
 - Windows peut retirer sans prévenir un hook souris trop lent. StepWatch le détecte par l'état physique des boutons, le réinstalle et le signale (« des clics ont pu manquer ») : vérifiez alors les dernières étapes.
 - La comparaison visuelle ignore les petites variations, sans garantie pour toutes les animations. Un changement plus bref que l'intervalle peut passer inaperçu.
 
@@ -102,7 +119,7 @@ Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/
 
 - [Architecture](docs/architecture.md) : modules, threads et garanties.
 - [Validation](docs/validation.md) : tests automatisés, CI, liste de vérification sur Windows réel et mesures.
-- [Distribution](docs/distribution.md) : construction des exécutables et publication d'une nouvelle version (une Release par version).
+- Une nouvelle version sur `main` déclenche la construction des paquets et la publication après réussite des tests. [Guide de publication](docs/distribution.md#publier-une-nouvelle-version)
 - [Feuille de route](docs/FEUILLE_DE_ROUTE.md) : dernières versions, édition de rapports, fiabilité de la capture et diffusion.
 - [Journal des modifications](CHANGELOG.md) et [historique du projet](docs/HISTORIQUE.md).
 
@@ -112,7 +129,7 @@ Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/
 DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Les images du README montrent la relecture et un rapport générés sous Linux à partir de captures synthétiques. Le parcours qui sépare capture et relecture s'inspire d'[OpenSteps](https://github.com/ebanez8/openstep).
+Les images du README montrent une session et un rapport de démonstration avec des données synthétiques. La séparation entre capture et relecture s'inspire d'OpenSteps. [OpenSteps](https://github.com/ebanez8/openstep)
 
 Licence : [GNU AGPL v3](LICENSE).
 

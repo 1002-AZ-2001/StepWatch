@@ -6,8 +6,8 @@ Chaque version publiée se trouve dans les [Releases GitHub](https://github.com/
 | --- | --- |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, un seul fichier. Il extrait son environnement dans un dossier temporaire au lancement : le premier démarrage peut être plus lent. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows, dossier portable : extraire puis lancer `StepWatch\StepWatch.exe`. Conserver le dossier entier. |
-| `stepwatch_VERSION_amd64.deb` | Debian 12+ ou Ubuntu 22.04+, amd64 : import ShareX et rapports uniquement. |
-| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux x86_64 : import ShareX et rapports uniquement. |
+| `stepwatch_VERSION_amd64.deb` | Debian 12+ ou Ubuntu 22.04+, amd64. |
+| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux x86_64. |
 | `SHA256SUMS-windows.txt`, `SHA256SUMS-linux.txt` | Sommes SHA-256 des fichiers ci-dessus. |
 
 Python est inclus dans tous les fichiers. Aucun ne contient d'identifiant, de télémétrie ni de service réseau.
@@ -37,9 +37,9 @@ Aucune installation n'est nécessaire. Les interventions sont enregistrées dans
 
 ## Linux : Debian, Ubuntu et Arch Linux
 
-**Sous Linux, seuls l'import ShareX et les rapports sont disponibles.** L'interface refuse l'enregistrement : les hooks et la capture de fenêtre sont réservés à Windows. Les deux paquets installent les mêmes fichiers : l'application dans `/opt/stepwatch`, la commande `stepwatch`, une entrée dans le menu et une icône. Les interventions et les journaux restent dans les dossiers de l'utilisateur.
+Les deux paquets installent l'application dans `/opt/stepwatch`, la commande `stepwatch` et une entrée dans le menu. Les interventions et les journaux restent dans les dossiers de l'utilisateur.
 
-Après l'installation, `stepwatch --self-test` vérifie l'application sur une session synthétique et ouvre puis ferme la fenêtre ; il n'utilise aucune donnée personnelle.
+Après l'installation, `stepwatch --self-test` vérifie les rapports sur des données synthétiques, puis ouvre et ferme l'interface. En session X11, il vérifie aussi le moteur de capture.
 
 ### Debian et Ubuntu
 
@@ -61,16 +61,28 @@ stepwatch
 
 `pacman` installe les dépendances depuis les dépôts Arch, y compris une police si aucune n'est présente (`ttf-font` : `pacman` propose alors un choix). Pour retirer l'application : `sudo pacman -R stepwatch`. Le paquet est construit par `makepkg`, sans privilèges, dans l'image officielle `archlinux:base-devel` ; la CI l'installe, le teste sous X11 et sous Wayland, puis le retire dans un conteneur `archlinux:base`. Il n'est pas signé avec une clé de mainteneur Arch : comparez son SHA-256 à celui de `SHA256SUMS-linux.txt`.
 
+### X11
+
+Dans une session X11, sélectionnez une fenêtre visible, un moniteur ou une zone en pixels et démarrez l'enregistrement. Les modes clics, changements visuels et hybride utilisent la même interface que sous Windows. La détection des clics nécessite l'extension X11 RECORD, présente sur la plupart des serveurs Xorg. Le mode changements visuels reste utilisable sans cette extension.
+
 ### Wayland
 
-Tk, la bibliothèque graphique de StepWatch, n'a pas de backend Wayland natif. Dans une session Wayland (GNOME, KDE Plasma, Sway, Hyprland…), il s'affiche par **XWayland**, présent par défaut sur la plupart des bureaux. Si XWayland manque, StepWatch s'arrête avec un message qui indique le paquet à installer :
+Dans une session Wayland, **Démarrer** ouvre le sélecteur de partage du bureau. Choisissez l'écran ou la fenêtre à partager selon les sources proposées par le bureau. StepWatch reçoit les images via PipeWire et enregistre les changements visuels. Le bureau peut mettre fin au partage à tout moment. Les réglages de fréquence, de sensibilité et de masquage restent disponibles.
+
+Installez les composants de capture manquants et le backend ScreenCast de votre bureau. Par exemple, `xdg-desktop-portal-gnome` pour GNOME, `xdg-desktop-portal-kde` pour KDE Plasma ou `xdg-desktop-portal-wlr` pour Sway. PipeWire doit être actif dans la session utilisateur.
 
 ```bash
-sudo apt install xwayland        # Debian, Ubuntu
-sudo pacman -S xorg-xwayland     # Arch Linux
+# Debian et Ubuntu
+sudo apt install xwayland pipewire xdg-desktop-portal python3-gi \
+  gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+  gstreamer1.0-plugins-base gstreamer1.0-pipewire
+
+# Arch Linux
+sudo pacman -S --needed xorg-xwayland pipewire xdg-desktop-portal \
+  python-gobject gstreamer gst-plugins-base gst-plugin-pipewire
 ```
 
-La fenêtre déclare la classe `Stepwatch`, ce qui permet au dock d'afficher l'icône de StepWatch. Avec une mise à l'échelle fractionnaire, certains bureaux affichent les applications XWayland légèrement floues ; c'est une limite de XWayland, pas de StepWatch.
+L'interface Tk s'affiche via XWayland. Le sélecteur du bureau et le flux de capture utilisent la session Wayland. Wayland réserve l'observation des clics globaux au compositeur, donc StepWatch propose le mode changements visuels sans marqueur de clic. L'import ShareX et les rapports fonctionnent avec les seules dépendances d'affichage.
 
 ## Construire depuis les sources
 
@@ -106,7 +118,7 @@ Le script crée `dist/stepwatch_VERSION_amd64.deb` sans privilège root. Les fic
 .venv/bin/python scripts/build_deb.py --bundle dist/StepWatch --output dist
 ```
 
-Les liens symboliques qui sortent du bundle sont refusés. Les bibliothèques X11 et de polices du système de compilation (fontconfig, freetype, Xft, X11…) ne sont pas embarquées : elles viennent du système cible, qui les déclare en dépendances. Sinon, un fontconfig ancien ne sait pas lire la configuration d'une distribution plus récente.
+Le bundle réutilisé doit être construit avec la même version de StepWatch, y compris le script `stepwatch/_wayland_portal.py` fourni à PyInstaller comme fichier de données. Le script s'exécute avec le Python système et les bibliothèques du bureau. Les liens symboliques qui sortent du bundle sont refusés. Le paquet utilise les bibliothèques X11 et de polices de la distribution cible, afin de lire sa configuration locale.
 
 Pour le paquet Arch, conservez le bundle, puis préparez le PKGBUILD et construisez-le avec `makepkg` en utilisateur non root, par exemple dans un conteneur Arch :
 
@@ -119,12 +131,12 @@ docker run --rm -v "$PWD/build/arch:/build" -w /build archlinux:base-devel bash 
 
 ## Publier une nouvelle version
 
-Chaque version a sa Release GitHub. La publication est automatique :
+L'arrivée d'une nouvelle version sur `main` déclenche sa Release GitHub.
 
 1. Choisissez le numéro `MAJEUR.MINEUR.CORRECTIF` et reportez-le dans `pyproject.toml` et `stepwatch/__init__.py`. Le manifeste Windows `scripts/StepWatch.manifest` reprend le même numéro suivi de `.0`.
-2. Dans `CHANGELOG.md`, déplacez le contenu de « Non publié » sous un nouveau titre `## VERSION — AAAA-MM-JJ`. Cette section devient le texte de la Release : sans elle, la publication est refusée.
-3. Fusionnez ces changements dans `main` par une pull request.
+2. Dans `CHANGELOG.md`, déplacez le contenu de « Non publié » sous un nouveau titre `## VERSION — AAAA-MM-JJ`. Cette section fournit le texte de la Release.
+3. Faites arriver ces changements sur `main`. Le workflow construit et teste les exécutables Windows et les paquets Linux. Il vérifie leurs sommes SHA-256, puis crée la Release et son tag `vVERSION`.
 
-Après la fusion, le workflow construit et teste les fichiers Windows et Linux, puis le job **Publier la version** crée le tag `vVERSION` et la Release avec tous les fichiers. Si la version est déjà publiée, `main` ne la modifie jamais : les fusions ordinaires ne touchent pas les Releases existantes.
+Dans GitHub Actions, **Run workflow** permet aussi de lancer la publication de la version de `main` avec l'option **Publier la version de main après les tests**. Une version déjà publiée est ignorée. Le lien **Dernière version** du README pointe automatiquement vers la Release courante.
 
 Pousser à la main un tag `vVERSION`, égal à la version de `pyproject.toml`, reste possible. Pour ce tag, le workflow crée la Release, ou remplace les fichiers d'une Release existante. Un tag qui ne correspond pas à la version est refusé.

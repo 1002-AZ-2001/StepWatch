@@ -21,11 +21,11 @@ WINDOW_CLASS = "stepwatch"
 def session_type(environ: Mapping[str, str] | None = None) -> str:
     """'wayland', 'x11' or 'inconnue', from the session environment."""
     environ = os.environ if environ is None else environ
+    if environ.get("WAYLAND_DISPLAY"):
+        return "wayland"
     declared = environ.get("XDG_SESSION_TYPE", "").lower()
     if declared in {"wayland", "x11"}:
         return declared
-    if environ.get("WAYLAND_DISPLAY"):
-        return "wayland"
     if environ.get("DISPLAY"):
         return "x11"
     return "inconnue"
@@ -38,7 +38,7 @@ def display_problem(platform: str | None = None,
     environ = os.environ if environ is None else environ
     if platform in {"win32", "darwin"} or environ.get("DISPLAY"):
         return None
-    if environ.get("WAYLAND_DISPLAY"):
+    if session_type(environ) == "wayland":
         return ("Session Wayland sans XWayland : StepWatch utilise Tk, qui s'affiche sous Wayland "
                 "par l'intermédiaire de XWayland. Installez XWayland (Debian et Ubuntu : paquet "
                 "« xwayland » ; Arch Linux : paquet « xorg-xwayland »), puis rouvrez votre session.")

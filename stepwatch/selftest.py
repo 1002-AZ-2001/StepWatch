@@ -65,7 +65,7 @@ def check_reports(base: Path) -> None:
     _check(len(list((imported / "captures").glob("*.png"))) == 3, "import ShareX incomplet")
 
 
-def check_interface() -> None:
+def check_interface(*, capture_x11: bool = False) -> None:
     """Open the real main window, let Tk draw it, then close it."""
     import tkinter as tk
 
@@ -78,6 +78,18 @@ def check_interface() -> None:
         for _ in range(5):
             root.update()
         _check(root.winfo_exists() and root.winfo_width() > 1, "fenêtre non dessinée")
+        if capture_x11:
+            from .x11 import X11Backend
+
+            backend = X11Backend()
+            try:
+                # Read a small part of the test window without saving it or
+                # starting a listener. Wayland sessions never open a portal here.
+                rect = Rect(root.winfo_rootx(), root.winfo_rooty(), 24, 24)
+                image = backend.grab(rect)
+                _check(image.mode == "RGB" and image.size == (24, 24), "capture X11 invalide")
+            finally:
+                backend.close()
         _check(app.shutdown(timeout=2), "arrêt de l'interface incomplet")
     finally:
         try:
@@ -100,7 +112,8 @@ def run(write: Callable[[str], None] | None = None) -> int:
             if sys.stdout is not None:  # None in the windowed Windows build.
                 print(message, flush=True)
 
-    write(f"StepWatch {__version__} — auto-test ({sys.platform}, session {session_type()})")
+    session = session_type()
+    write(f"StepWatch {__version__} — auto-test ({sys.platform}, session {session})")
     try:
         with tempfile.TemporaryDirectory(prefix="stepwatch-selftest-") as temporary:
             check_reports(Path(temporary))
@@ -109,8 +122,11 @@ def run(write: Callable[[str], None] | None = None) -> int:
         if problem:
             write(f"Interface Tk : non vérifiée — {problem}")
         else:
-            check_interface()
+            capture_x11 = sys.platform.startswith("linux") and session == "x11"
+            check_interface(capture_x11=capture_x11)
             write("Interface Tk : OK")
+            if capture_x11:
+                write("Capture X11 : OK")
     except Exception as exc:
         LOGGER.exception("Auto-test en échec")
         write(f"Auto-test en échec : {exc}")

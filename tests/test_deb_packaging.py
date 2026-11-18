@@ -96,7 +96,10 @@ class DebianPackagingTests(unittest.TestCase):
         self.assertIn("Version: 0.2.0", metadata)
         self.assertIn("Architecture: amd64", metadata)
         self.assertIn("libc6 (>= 2.35)", metadata)
-        self.assertIn("recording requires Windows", metadata)
+        self.assertIn("recording on X11", metadata)
+        self.assertIn("libxcb-randr0", metadata)
+        self.assertIn("Suggests: xwayland, python3-gi", metadata)
+        self.assertIn("gstreamer1.0-pipewire", metadata)
         listing = subprocess.check_output(["dpkg-deb", "--contents", str(result)], text=True)
         self.assertIn("root/root", listing)
         self.assertIn("./usr/bin/stepwatch", listing)
@@ -109,7 +112,7 @@ class DebianPackagingTests(unittest.TestCase):
         self.assertEqual(wrapper.read_text(), '#!/bin/sh\nexec /opt/stepwatch/StepWatch "$@"\n')
         self.assertEqual(stat.S_IMODE(wrapper.stat().st_mode), 0o755)
         self.assertEqual((extracted / "opt/stepwatch/StepWatch").read_bytes(), self.executable.read_bytes())
-        self.assertIn("Windows", (extracted / "usr/share/applications/stepwatch.desktop").read_text())
+        self.assertIn("Screen recording", (extracted / "usr/share/applications/stepwatch.desktop").read_text())
 
 
 if __name__ == "__main__":

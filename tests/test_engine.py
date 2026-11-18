@@ -7,13 +7,13 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
 from stepwatch.engine import Recorder, click_annotation
 from stepwatch.models import CaptureConfig, CaptureTarget, Rect
-from stepwatch.platform import CaptureUnavailable
+from stepwatch.platform import CaptureCancelled, CaptureEnded, CaptureUnavailable
 from stepwatch.storage import SessionStore, StorageError
 
 
@@ -70,6 +70,39 @@ class LegacyBackend(FakeBackend):
     """A backend without hook-time hit-testing: the worker checks clicks."""
 
     locate_click = None
+
+
+class FakePortalBackend(FakeBackend):
+    uses_portal = True
+
+    def __init__(self):
+        super().__init__()
+        self.awaiting_selection = threading.Event()
+        self.selection_done = threading.Event()
+        self.selection_error = None
+        self.stream_ended = False
+        self.grab_error = None
+
+    def prepare(self, target, *, stop_event):
+        self.awaiting_selection.set()
+        deadline = time.monotonic() + 2
+        while not self.selection_done.wait(.01):
+            if stop_event.is_set():
+                raise CaptureCancelled("Arrêt demandé par StepWatch")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Le test n’a pas libéré la sélection")
+        if self.selection_error is not None:
+            raise self.selection_error
+
+    def check_live(self):
+        if self.stream_ended:
+            raise CaptureEnded("Le partage de la source a été arrêté.")
+
+    def grab(self, rectangle):
+        if self.grab_error is not None:
+            raise self.grab_error
+        frame = super().grab(rectangle)
+        return frame if len(self.grab_times) == 1 else None
 
 
 class FakeListener:
@@ -130,6 +163,12 @@ class RecorderTests(unittest.TestCase):
     def shutdown(self):
         self.backend.release_grab.set()
         self.recorder.stop(timeout=3)
+
+    def make_portal_recorder(self, mode="visual"):
+        self.backend = FakePortalBackend()
+        factory = Mock(return_value=self.backend, uses_portal=True)
+        self.make_recorder(mode=mode, backend_factory=factory)
+        return self.recorder
 
     def wait_for(self, predicate, message="Condition did not become true", timeout=3):
         deadline = time.monotonic() + timeout
@@ -221,6 +260,46 @@ class RecorderTests(unittest.TestCase):
         self.assertTrue(self.recorder.stop())
         self.assertEqual(self.store.steps, [])
         self.assertTrue(self.recorder._clicks.empty())
+
+    def test_click_overflow_does_not_block_hook_and_is_reported_on_stop(self):
+        with patch("stepwatch.engine.MAX_PENDING_CLICKS", 3):
+            self.make_recorder(mode="clicks", click_delay=0)
+            self.backend.block_next = True
+            listener = self.start()
+            listener.click()
+            self.assertTrue(self.backend.grab_entered.wait(1))
+            for index in range(30):
+                listener.click(x=0 if index % 2 == 0 else -10)
+            self.assertEqual(self.recorder._clicks.qsize(), 3)
+            self.assertFalse(self.recorder.stop(timeout=0))
+            self.backend.release_grab.set()
+            self.assertTrue(self.recorder.stop())
+        self.drain_events()
+        reports = [event for event in self.observed_events if "saturation" in event["message"]]
+        self.assertEqual(len(reports), 1)
+        self.assertIn("(27)", reports[0]["message"])
+        self.assertTrue(self.recorder._clicks.empty())
+
+    def test_delayed_clicks_share_capacity_and_pause_releases_their_slots(self):
+        with patch("stepwatch.engine.MAX_PENDING_CLICKS", 3):
+            self.make_recorder(mode="clicks", click_delay=20)
+            listener = self.start()
+            listener.click(x=-10)
+            listener.click(x=0)
+            listener.click(x=10)
+            self.wait_for(lambda: self.recorder._clicks.empty())
+            listener.click(x=20)
+            self.wait_for(lambda: any("saturation" in event["message"] for event in self.observed_events))
+            self.recorder.pause()
+            self.wait_for(lambda: self.observed_events[-1]["ignored"] == 4)
+            self.recorder.resume()
+            listener.click(x=0)
+            self.wait_for(lambda: self.recorder._clicks.empty())
+            self.recorder.pause()
+            self.wait_for(lambda: self.observed_events[-1]["ignored"] == 5)
+            self.assertTrue(self.recorder.stop())
+        self.assertEqual(sum("saturation" in event["message"] for event in self.observed_events), 1)
+        self.assertEqual(self.saved_events(), [])
 
     def test_backend_without_locator_or_failing_locator_falls_back_to_worker(self):
         legacy = LegacyBackend()
@@ -347,6 +426,96 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual([step["trigger"] for step in self.store.steps],
                          ["initial", "visual_change"])
         self.assertIn("origine non déterminée", self.store.steps[1]["annotation"])
+
+    def test_portal_waits_for_selection_before_recording_and_skips_empty_samples(self):
+        recorder = self.make_portal_recorder()
+        recorder.start()
+        self.assertTrue(self.backend.awaiting_selection.wait(1))
+        self.assertEqual(recorder.state, "starting")
+        self.assertEqual(self.backend.grab_times, [])
+        self.backend.selection_done.set()
+        self.wait_for(lambda: len(self.backend.grab_times) >= 3)
+        self.assertEqual(recorder.state, "recording")
+        self.assertEqual(self.listeners, [])
+        self.assertTrue(recorder.stop())
+        self.assertEqual(len(self.saved_events()), 1)
+        self.assertTrue(all(event["ignored"] == 0 for event in self.observed_events))
+
+    def test_portal_cancel_closes_resources_without_error(self):
+        recorder = self.make_portal_recorder()
+        self.backend.selection_error = CaptureCancelled("Sélection annulée")
+        self.backend.selection_done.set()
+        recorder.start()
+        self.wait_for(lambda: recorder.state == "stopped")
+        self.assertTrue(self.backend.closed)
+        self.assertFalse(any(event["type"] == "error" for event in self.observed_events))
+        self.assertIn("annulée", self.observed_events[-1]["message"])
+
+    def test_portal_stop_cancels_pending_selection(self):
+        recorder = self.make_portal_recorder()
+        recorder.start()
+        self.assertTrue(self.backend.awaiting_selection.wait(1))
+        self.assertTrue(recorder.stop(timeout=1))
+        self.assertEqual(recorder.state, "stopped")
+        self.assertTrue(self.backend.closed)
+        self.drain_events()
+        self.assertFalse(any(event["type"] == "error" or "démarré" in event["message"]
+                             for event in self.observed_events))
+
+    def test_stopping_during_a_portal_frame_is_not_an_error(self):
+        recorder = self.make_portal_recorder()
+        reading = threading.Event()
+
+        def grab(_rectangle):
+            reading.set()
+            if recorder._stop.wait(2):
+                raise CaptureCancelled("Partage Wayland arrêté.")
+            raise RuntimeError("Le test n'a pas arrêté la lecture.")
+
+        with patch.object(self.backend, "grab", side_effect=grab):
+            self.backend.selection_done.set()
+            recorder.start()
+            self.assertTrue(reading.wait(1))
+            self.assertTrue(recorder.stop(timeout=1))
+        self.assertEqual(recorder.state, "stopped")
+        self.assertTrue(self.backend.closed)
+        self.drain_events()
+        self.assertFalse(any(event["type"] == "error" for event in self.observed_events))
+
+    def test_portal_rejects_non_visual_mode_before_asking_for_a_source(self):
+        recorder = self.make_portal_recorder(mode="hybrid")
+        recorder.start()
+        self.wait_for(lambda: recorder.state == "error")
+        self.assertFalse(self.backend.awaiting_selection.is_set())
+        self.assertTrue(self.backend.closed)
+        self.assertEqual(self.listeners, [])
+        self.assertTrue(any("mode de capture visuel" in event["message"]
+                            for event in self.observed_events if event["type"] == "error"))
+
+    def test_portal_end_during_grab_keeps_the_recording_without_retry(self):
+        recorder = self.make_portal_recorder()
+        self.backend.selection_done.set()
+        recorder.start()
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.backend.grab_error = CaptureEnded("Le flux est terminé.")
+        self.wait_for(lambda: recorder.state == "error")
+        self.assertTrue(self.backend.closed)
+        errors = [event["message"] for event in self.observed_events if event["type"] == "error"]
+        self.assertEqual(errors, ["Le flux est terminé."])
+        self.assertEqual(len(self.store.steps), 1)
+
+    def test_portal_revocation_is_noticed_while_paused(self):
+        with patch("stepwatch.engine.PORTAL_POLL_INTERVAL", .05):
+            recorder = self.make_portal_recorder()
+            self.backend.selection_done.set()
+            recorder.start()
+            self.wait_for(lambda: len(self.saved_events()) == 1)
+            recorder.pause()
+            self.backend.stream_ended = True
+            self.wait_for(lambda: recorder.state == "error")
+        self.assertTrue(self.backend.closed)
+        self.assertTrue(any("partage de la source a été arrêté" in event["message"]
+                            for event in self.observed_events if event["type"] == "error"))
 
     def test_hybrid_defers_visual_sample_while_click_is_pending(self):
         self.make_recorder(mode="hybrid", interval=.1, click_delay=.15)
@@ -493,6 +662,20 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual(self.listeners, [])
         self.assertEqual(self.store.steps, [])
         self.assertTrue((self.store.directory / "rapport.html").is_file())
+
+    def test_unavailable_default_backend_reports_display_problem_and_closes_store(self):
+        self.store = SessionStore(self.base_dir, "Intervention de test")
+        target = CaptureTarget("region", "Zone de test", Rect(0, 0, 80, 60))
+        with patch("stepwatch.engine.capture_backend_factory", return_value=None), \
+                patch("stepwatch.engine.display_problem", return_value="Aucun affichage graphique."):
+            self.recorder = Recorder(target, CaptureConfig(mode="visual"), self.store)
+            self.addCleanup(self.shutdown)
+            with patch.object(self.store, "close", wraps=self.store.close) as close:
+                self.recorder.start()
+                self.wait_for(lambda: self.recorder.state == "error")
+                close.assert_called_once_with()
+        self.assertTrue(any("Aucun affichage graphique." in event["message"]
+                            for event in self.observed_events if event["type"] == "error"))
 
     def test_mouse_hook_startup_failure_closes_all_created_resources(self):
         class FailedListener(FakeListener):

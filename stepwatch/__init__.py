@@ -1,8 +1,8 @@
-"""StepWatch : documentation locale des interventions Windows."""
+"""StepWatch : documentation locale des interventions informatiques."""
 
 import logging
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # Messages written to the diagnostic file only when diagnostics.setup() runs.
 logging.getLogger(__name__).addHandler(logging.NullHandler())

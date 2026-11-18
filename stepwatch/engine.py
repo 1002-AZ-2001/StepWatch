@@ -1,8 +1,8 @@
 """Capture and ordered PNG writing can overlap on separate threads.
 
-Native mouse callbacks hit-test the click with a few stateless Win32 queries,
-then only enqueue it. MSS resources are created, used and closed on the capture
-thread. Only redacted images reach the writer or the UI. An intervention
+Native mouse callbacks hit-test the click, then enqueue it without waiting for
+the capture thread. Screen capture resources are opened, used and closed on
+that thread. Only redacted images reach the writer or the UI. An intervention
 allows one submitted write and at most one frame being prepared for it.
 """
 from __future__ import annotations
@@ -13,14 +13,18 @@ from datetime import datetime, timezone
 import heapq
 import logging
 import queue
+import sys
 import threading
 import time
 from typing import Callable
 
+from stepwatch.display import display_problem
 from stepwatch.events import PreviewEventQueue
 from stepwatch.imaging import VisualComparator, paint_click, paint_masks, preview_image
 from stepwatch.models import CaptureConfig, CaptureTarget
-from stepwatch.platform import DEFAULT_DOUBLE_CLICK, CaptureUnavailable, WindowsBackend
+from stepwatch.platform import (
+    DEFAULT_DOUBLE_CLICK, CaptureCancelled, CaptureEnded, CaptureUnavailable, capture_backend_factory,
+)
 from stepwatch.storage import ReportWriteError, SessionStore, StorageError
 
 
@@ -29,6 +33,10 @@ LOGGER = logging.getLogger(__name__)
 #: The interface only shows a preview: send it a bounded copy, resized here on
 #: the capture thread, instead of a full-resolution image per saved step.
 PREVIEW_MAX_SIZE = (1600, 1000)
+
+#: Shared limit for ready and delayed clicks, including work stalled by a write.
+MAX_PENDING_CLICKS = 256
+PORTAL_POLL_INTERVAL = 1.0
 
 #: Queued click whose target-relative position could not be computed by the
 #: hook (backend without ``locate_click`` or query failure): the worker
@@ -80,24 +88,30 @@ class _PendingClick:
 
 
 def mouse_listener(callback):
-    from pynput import mouse
-    return mouse.Listener(on_click=callback)
+    if sys.platform.startswith("linux"):
+        from stepwatch.x11 import X11ClickListener
+        return X11ClickListener(callback)
+    from pynput.mouse import Listener
+    return Listener(on_click=callback)
 
 
 class Recorder:
     """One intervention. A stopped instance is deliberately not reusable."""
 
     def __init__(self, target: CaptureTarget, config: CaptureConfig,
-                 store: SessionStore, backend_factory: Callable = WindowsBackend,
+                 store: SessionStore, backend_factory: Callable | None = None,
                  listener_factory: Callable = mouse_listener):
         self.target, self.config, self.store = target, config, store
         self.events = PreviewEventQueue()
-        self._backend_factory, self._listener_factory = backend_factory, listener_factory
+        self._backend_factory = capture_backend_factory() if backend_factory is None else backend_factory
+        self._listener_factory = listener_factory
         self._state = "idle"
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._clicks = queue.Queue()
+        self._click_slots = threading.BoundedSemaphore(MAX_PENDING_CLICKS)
+        self._dropped_clicks = 0
         self._notes = queue.Queue()
         self._thread = None
         self._kept = self._ignored = 0
@@ -121,9 +135,11 @@ class Recorder:
         with self._lock:
             if self._state != "idle":
                 raise RuntimeError("Cet enregistreur a déjà été démarré.")
-            self._state = "recording"
+            portal = getattr(self._backend_factory, "uses_portal", False) is True
+            self._state = "starting" if portal else "recording"
             self._thread = threading.Thread(target=self._run, name="StepWatch-capture", daemon=False)
-            self._emit("status", "Enregistrement démarré.")
+            self._emit("status", "Choisissez la source à partager dans la fenêtre du système."
+                       if portal else "Enregistrement démarré.")
             try:
                 self._thread.start()
             except Exception as exc:
@@ -239,7 +255,10 @@ class Recorder:
             if self._last_press and key == self._last_press[0] and now - self._last_press[1] < .03:
                 return
             self._last_press = (key, now)
-            self._clicks.put((now, x, y, str(button), epoch, located))
+            if self._click_slots.acquire(blocking=False):
+                self._clicks.put_nowait((now, x, y, key[2], epoch, located))
+            else:
+                self._dropped_clicks += 1
         self._wake.set()
 
     def _restart_listener(self, listener):
@@ -261,6 +280,13 @@ class Recorder:
     def _ignored_event(self, message):
         self._ignored += 1
         self._emit("ignored", message)
+
+    def _report_dropped_clicks(self):
+        with self._lock:
+            dropped, self._dropped_clicks = self._dropped_clicks, 0
+        if dropped:
+            self._ignored += dropped
+            self._emit("log", f"Clics ignorés pendant la saturation de la file de capture ({dropped}).")
 
     def _write_capture(self, image, trigger, click, annotation, click_count, timestamp):
         try:
@@ -288,6 +314,7 @@ class Recorder:
         report_error = False
         serial = 0
         fatal = False
+        cancelled = False
         visual_due = time.monotonic()
         active_epoch = self._epoch
 
@@ -306,10 +333,27 @@ class Recorder:
             self._emit("saved", "Capture enregistrée.", step=step, image=preview)
 
         try:
+            if self._backend_factory is None:
+                raise CaptureUnavailable(display_problem() or
+                                         "La capture nécessite Windows ou un bureau Linux X11 ou Wayland.")
             backend = self._backend_factory()
+            uses_portal = getattr(backend, "uses_portal", False) is True
+            if uses_portal:
+                if self.config.mode != "visual":
+                    raise CaptureUnavailable("Wayland requiert le mode de capture visuel.")
+                backend.prepare(self.target, stop_event=self._stop)
+            if self._stop.is_set():
+                return
             # Fail early on unsupported platform/invalid initial selection.
             # This also initialises the Win32 adapter before the hook uses it.
             backend.resolve(self.target)
+            with self._lock:
+                if self._stop.is_set():
+                    return
+                if uses_portal:
+                    self._state = "recording"
+                    self._emit("status", "Enregistrement démarré.")
+            check_live = getattr(backend, "check_live", None) if uses_portal else None
             settings = getattr(backend, "double_click_settings", None)
             double_time, double_dx, double_dy = settings() if callable(settings) else DEFAULT_DOUBLE_CLICK
             locate_click = getattr(backend, "locate_click", None)
@@ -325,10 +369,12 @@ class Recorder:
             was_down = False
             previous_poll = time.monotonic()
             next_hook_poll = previous_poll
+            next_portal_poll = previous_poll
             unreported_since = unreported_after = None
             grace = HOOK_SILENCE_GRACE
             while not self._stop.is_set():
                 self._wake.clear()
+                self._report_dropped_clicks()
                 if listener is not None and not listener.is_alive():
                     raise RuntimeError("Le hook souris s’est interrompu ; l’enregistrement est arrêté.")
                 if writing is not None and writing.done():
@@ -337,6 +383,9 @@ class Recorder:
                     finish_write()
                     self._write_notes()
                 now = time.monotonic()
+                if check_live is not None and now >= next_portal_poll:
+                    check_live()
+                    next_portal_poll = now + PORTAL_POLL_INTERVAL
                 if self._slow_hook:
                     slow, self._slow_hook = self._slow_hook, 0.0
                     LOGGER.warning("Localisation du clic lente dans le hook souris : %.0f ms", slow * 1000)
@@ -362,13 +411,15 @@ class Recorder:
                 with self._lock:
                     state, epoch = self._state, self._epoch
                 if epoch != active_epoch:
-                    for _ in pending:
-                        self._ignored_event("Clic en attente annulé par la pause.")
-                    pending.clear()
+                    if pending:
+                        self._click_slots.release(len(pending))
+                        for _ in pending:
+                            self._ignored_event("Clic en attente annulé par la pause.")
+                        pending.clear()
                     last_sequence = None
                     visual_due = now
                     active_epoch = epoch
-                while True:
+                for _ in range(MAX_PENDING_CLICKS):
                     try:
                         when, x, y, button, click_epoch, located = self._clicks.get_nowait()
                     except queue.Empty:
@@ -376,8 +427,10 @@ class Recorder:
                     with self._lock:
                         click_valid = self._state == "recording" and click_epoch == self._epoch
                     if not click_valid:
+                        self._click_slots.release()
                         self._ignored_event("Clic en attente annulé par la pause ou l’arrêt.")
                         continue
+                    retained_click = False
                     try:
                         if located is _UNRESOLVED:
                             rect = backend.resolve(self.target)
@@ -406,11 +459,17 @@ class Recorder:
                         last_sequence = _PendingClick(when, x, y, located, button, click_epoch)
                         heapq.heappush(pending, (when + self.config.click_delay, serial,
                                                 last_sequence))
+                        retained_click = True
+                    except CaptureEnded:
+                        raise
                     except CaptureUnavailable as exc:
                         self._ignored_event(str(exc))
                         if str(exc) != last_error:
                             self._emit("error", str(exc))
                             last_error = str(exc)
+                    finally:
+                        if not retained_click:
+                            self._click_slots.release()
                 # Pause/resume can occur while native target resolution runs.
                 # Preserve newly queued clicks from the current epoch, only
                 # discard pre-pause work rather than relying on an old snapshot.
@@ -418,8 +477,11 @@ class Recorder:
                     state, epoch = self._state, self._epoch
                 if epoch != active_epoch:
                     retained = [entry for entry in pending if entry[2].epoch == epoch]
-                    for _ in range(len(pending) - len(retained)):
-                        self._ignored_event("Clic en attente annulé par la pause.")
+                    count = len(pending) - len(retained)
+                    if count:
+                        self._click_slots.release(count)
+                        for _ in range(count):
+                            self._ignored_event("Clic en attente annulé par la pause.")
                     pending = retained
                     heapq.heapify(pending)
                     if last_sequence is not None and last_sequence.epoch != epoch:
@@ -432,6 +494,7 @@ class Recorder:
                 trigger = None
                 if state == "recording" and pending and pending[0][0] <= now:
                     _, _, pending_click = heapq.heappop(pending)
+                    self._click_slots.release()
                     if pending_click is last_sequence:
                         last_sequence = None
                     if pending_click.epoch != epoch:
@@ -444,6 +507,8 @@ class Recorder:
                     trigger = "visual_change"
                 if trigger is None:
                     deadlines = []
+                    if check_live is not None:
+                        deadlines.append(next_portal_poll)
                     if watch_hook:
                         deadlines.append(next_hook_poll)
                     elif listener is not None:
@@ -464,6 +529,8 @@ class Recorder:
                 try:
                     rect = backend.resolve(self.target)
                     frame = backend.grab(rect)
+                    if frame is None:
+                        continue  # The compositor has sent no new frame.
                     timestamp = datetime.now(timezone.utc)
                     with self._lock:
                         valid = self._state == "recording" and epoch == self._epoch and not self._stop.is_set()
@@ -512,6 +579,8 @@ class Recorder:
                     writing.add_done_callback(lambda _result: self._wake.set())
                     if comparator is not None:
                         comparator.reference = sample
+                except (CaptureCancelled, CaptureEnded):
+                    raise
                 except CaptureUnavailable as exc:
                     if str(exc) != last_error:
                         self._emit("error", str(exc))
@@ -519,6 +588,12 @@ class Recorder:
                     self._ignored_event("Cible indisponible ; nouvelle tentative automatique.")
                 finally:
                     frame = output = sample = None
+        except CaptureCancelled:
+            cancelled = not self._stop.is_set()
+        except CaptureEnded as exc:
+            if not self._stop.is_set():
+                fatal = True
+                self._emit("error", str(exc))
         except Exception as exc:
             fatal = True
             LOGGER.exception("Enregistrement interrompu")
@@ -527,10 +602,15 @@ class Recorder:
             with self._lock:
                 self._locate = None
                 self._state = "stopping"  # Prevent new clicks or notes during finalisation.
+            self._report_dropped_clicks()
             if pending or not self._clicks.empty():
                 self._emit("log", "Les clics encore en attente ont été annulés à l’arrêt.")
+                abandoned = len(pending)
+                pending.clear()
                 while not self._clicks.empty():
                     self._clicks.get_nowait()
+                    abandoned += 1
+                self._click_slots.release(abandoned)
             for resource in (listener, backend):
                 if resource is None:
                     continue
@@ -568,6 +648,12 @@ class Recorder:
                 self._emit("error", f"Erreur d’écriture du rapport : {exc}")
             # Queue the last event before publishing the final state: a reader
             # that sees "stopped" or "error" already has every event.
-            self._emit("status", "Arrêt avec erreur ; consulter le journal." if fatal else "Enregistrement arrêté ; rapport sauvegardé.")
+            if fatal:
+                message = "Arrêt avec erreur. Consultez le journal."
+            elif cancelled:
+                message = "Sélection de la source de capture annulée."
+            else:
+                message = "Enregistrement arrêté. Rapport sauvegardé."
+            self._emit("status", message)
             with self._lock:
                 self._state = "error" if fatal else "stopped"

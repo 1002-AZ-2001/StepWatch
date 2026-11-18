@@ -1,6 +1,6 @@
 # Validation de StepWatch
 
-Ce document distingue ce qui est vérifié automatiquement de ce qui reste à vérifier sur un poste Windows réel.
+Ce document décrit les tests automatiques et les vérifications à faire sur un poste Windows ou Linux.
 
 ## Ce que vérifie la CI à chaque modification
 
@@ -9,8 +9,8 @@ Le workflow [Tests et paquets Windows / Debian](https://github.com/1002-AZ-2001/
 | Job | Vérifications |
 | --- | --- |
 | Windows x64 | Installation par `install.ps1` ; suite complète, interface Tk comprise ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; `StepWatch.exe --self-test` ; sommes SHA-256. |
-| Linux amd64 (Ubuntu 22.04) | Lint `ruff` ; `pip check` ; suite complète sous Xvfb, interface Tk et vraie capture MSS comprises ; construction du `.deb`, installation par `apt`, lancement contrôlé (`smoke_linux_bundle.py`) et `stepwatch --self-test` sous X11 ; auto-test dans une session **Wayland** réelle (weston headless + XWayland) et message explicite sans XWayland (`smoke_wayland.py`) ; sommes SHA-256. |
-| Debian 12 (conteneur) | Installation du `.deb` par `apt`, `stepwatch --self-test` avec l'interface, désinstallation complète. |
+| Linux amd64 (Ubuntu 22.04) | Vérifications `ruff` et `pip check`, tests Tk et capture X11 sous Xvfb. Construction et installation du `.deb`, contrôle de la présence du script ScreenCast, lancement et capture X11 depuis l'exécutable installé. Contrôle de l'affichage de l'interface avec Weston et XWayland. Sommes SHA-256. |
+| Debian 12 (conteneur) | Installation du `.deb` par `apt`, auto-test avec capture X11, désinstallation complète. |
 | Arch Linux (conteneurs) | Paquet construit par `makepkg` non root ; installation par `pacman`, auto-test X11 et Wayland (weston + `xorg-xwayland`), désinstallation complète. |
 | Publier la version | Notes tirées de `CHANGELOG.md`, tag et Release, uniquement pour une version pas encore publiée (voir [distribution](distribution.md)). |
 
@@ -34,13 +34,20 @@ python3 -m venv .venv
 .venv/bin/ruff check stepwatch tests scripts
 ```
 
-Les tests de l'interface sont ignorés par défaut. Avec Tcl/Tk et un serveur X de test déjà démarré (par exemple `Xvfb :99`) :
+Activez les tests de l'interface et de capture avec Tcl/Tk et un serveur X de test déjà démarré, par exemple `Xvfb :99`.
 
 ```bash
-DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
+DISPLAY=:99 XDG_SESSION_TYPE=x11 STEPWATCH_GUI_TESTS=1 STEPWATCH_X11_TESTS=1 \
+  .venv/bin/python -m unittest discover -s tests -v
 ```
 
 Vérifiez le bilan du runner : un test graphique ignoré faute d'affichage ne compte pas comme réussi.
+
+Avec les dépendances Wayland système installées, le test suivant vérifie la conversion NV12 en RGB et le rejet des trames corrompues ou vides.
+
+```bash
+STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 'test_wayland.py' -v
+```
 
 ## Validation manuelle sur Windows
 
@@ -55,10 +62,35 @@ Vérifiez le bilan du runner : un test graphique ignoré faute d'affichage ne co
 7. Testez une zone masquée : aucun pixel sensible ne doit apparaître dans les PNG, l'aperçu ou les rapports. Vérifiez de nouveau après un redimensionnement.
 8. Arrêtez puis relancez une session, et fermez l'application pendant un enregistrement. Vérifiez le rapport, la libération des hooks et l'absence de capture après l'arrêt.
 9. Importez des images ShareX, ouvrez le rapport hors ligne et comparez les sources avant et après.
-10. Sous Linux (GNOME ou KDE, en session Wayland), lancez StepWatch depuis le menu : la fenêtre doit s'ouvrir avec l'icône StepWatch dans le dock. Importez des images ShareX et ouvrez le rapport.
-11. Cliquez dans une fenêtre lancée en administrateur pendant l'enregistrement : notez si le journal signale une réinstallation du hook.
+10. Cliquez dans une fenêtre lancée en administrateur pendant l'enregistrement et consultez le journal pour détecter une éventuelle réinstallation du hook.
+
+## Validation sur un bureau Linux
+
+1. En session X11, capturez une fenêtre de test en mode **Hybride**. Déplacez et redimensionnez la fenêtre. Testez un clic dans la cible et un clic dans une autre fenêtre qui la recouvre, puis vérifiez les étapes et leurs marqueurs.
+2. En session X11 avec plusieurs moniteurs, vérifiez la capture de chaque moniteur et d'une zone personnalisée. Contrôlez les pixels de la zone capturée et la position des masques dans le PNG.
+3. En session Wayland, ouvrez StepWatch depuis le menu, lancez un enregistrement et annulez le partage dans le portail. Vérifiez le retour de l'interface à un état permettant de démarrer une nouvelle session.
+4. Autorisez une capture depuis **Démarrer**, puis modifiez la source partagée. Vérifiez les changements enregistrés et les masques dans les PNG. Testez la pause et la reprise.
+5. Arrêtez le partage depuis le bureau et vérifiez l'état de StepWatch et la disponibilité du rapport. Recommencez en utilisant **Arrêter** dans StepWatch.
+
+Un portail de test sur D-Bus a transmis à StepWatch un flux PipeWire animé de 162 × 94 à 120 images par seconde. Sur Debian 13, le backend a reçu 70 images distinctes sur 70 demandes, y compris après deux pauses de lecture de 1,25 s. Le test reproduisait l'épuisement des 16 buffers du producteur avant le correctif de recyclage. Une variante à deux couleurs a vérifié le contenu des pixels et la révocation par le portail.
+
+Un essai de bout en bout sur Sway 1.12, XWayland et le portail wlr 0.8.5 a enregistré deux états d'un même écran. Les PNG contenaient les couleurs attendues et le masque. Le moteur a respecté la pause et la reprise, finalisé les rapports et fermé le partage. Le banc utilisait une sortie virtuelle à haute fréquence pour réduire une course du portail wlr observée à 60 Hz. Les essais sur GNOME et KDE restent à faire.
 
 ## Mesures
+
+### Audit des performances depuis la version 0.5.0
+
+Les mesures utilisent des données synthétiques sous Linux. Le pic RAM d'import correspond au processus de test. La mesure de la file de clics couvre les allocations Python de la rafale.
+
+| Opération | Avant | Après |
+| --- | ---: | ---: |
+| Import ShareX de trois PNG 4K RGB | 140,7 Mio de pic RAM et 1,40 s de CPU | 46,6 Mio et 0,74 s |
+| Décodage en RGB d'une image MSS 4K | 8,69 ms en médiane | 5,57 ms et une copie de 31,6 Mio évitée |
+| 20 000 clics pendant une capture bloquée | 20 000 entrées et 3,35 Mio d'allocations | 256 entrées et 43 Kio |
+| 80 aperçus de 1 600 × 1 000 reçus pendant que l'onglet Capture est masqué | 80 rendus et 1,32 s de CPU | Aucun rendu avant le retour à l'onglet, puis un seul |
+| 1 000 captures de 16 × 16, écritures de JSON et HTML | 291,7 Mio écrits et 9,65 s de CPU | 252,5 Mio et 7,10 s |
+
+La génération des rapports réécrit les fichiers JSON et HTML complets à chaque étape. Le volume cumulé des écritures continue donc de croître au carré du nombre d'étapes.
 
 ### Enregistrement 4K et traitement en parallèle
 

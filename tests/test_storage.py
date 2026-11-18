@@ -327,6 +327,29 @@ class StandaloneReportTests(unittest.TestCase):
         self.assertEqual(previous.read_bytes(), original)
         self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
 
+    def test_truncated_png_and_wrong_crc_preserve_the_previous_report(self):
+        report = export_standalone(self.store.directory)
+        contents = report.read_bytes()
+        capture = self.store.directory / "captures/000002.png"
+        original = capture.read_bytes()
+        corrupted = bytearray(original)
+        corrupted[corrupted.index(b"IDAT") + 4] ^= 1
+        for invalid in (original[:8], original[:-1], corrupted):
+            with self.subTest(length=len(invalid)):
+                capture.write_bytes(invalid)
+                with self.assertRaisesRegex(StorageError, "Étape 2 : 000002.png n'est pas une image PNG valide"):
+                    export_standalone(self.store.directory)
+                self.assertEqual(report.read_bytes(), contents)
+        self.assertEqual(list(self.store.directory.glob(".stepwatch-*")), [])
+
+    def test_streaming_png_export_preserves_bytes_across_multiple_chunks(self):
+        step = self.store.save(Image.effect_noise((512, 384), 100).convert("RGB"), "visual")
+        original = (self.store.directory / step["image"]).read_bytes()
+        self.assertGreater(len(original), 96 * 1024)
+        report = export_standalone(self.store.directory).read_text(encoding="utf-8")
+        embedded = re.findall(r'src="data:image/png;base64,([^"]+)"', report)[-1]
+        self.assertEqual(base64.b64decode(embedded, validate=True), original)
+
     def test_missing_or_corrupt_capture_names_the_step(self):
         capture = self.store.directory / "captures" / "000002.png"
         capture.write_bytes(b"pas une image")
@@ -392,6 +415,38 @@ class ShareXImportTests(unittest.TestCase):
         second = import_sharex(self.source, self.output)
         self.assertNotEqual(first, second)
         self.assertTrue((first / "captures/000001.png").exists())
+
+    def test_retry_after_temporary_report_failure_retains_and_lists_every_capture(self):
+        self.make_image("first.png", 1000, "red")
+        self.make_image("second.png", 2000, "blue")
+        self.make_image("third.png", 3000, "green")
+        original_flush = SessionStore._flush
+        failed = False
+
+        def flush(store):
+            nonlocal failed
+            if len(store.steps) == 2 and not failed:
+                failed = True
+                raise PermissionError("verrou temporaire")
+            original_flush(store)
+
+        with patch.object(SessionStore, "_flush", flush):
+            destination = import_sharex(self.source, self.output)
+        self.assertTrue(failed)
+        self.assertEqual(len(list((destination / "captures").glob("*.png"))), 3)
+        data = json.loads((destination / "steps.json").read_text(encoding="utf-8"))
+        self.assertEqual([step["index"] for step in data["steps"]], [1, 2, 3])
+        self.assertIn("000002.png", (destination / "rapport.html").read_text(encoding="utf-8"))
+        self.assertIn("000002.png", (destination / MARKDOWN_REPORT).read_text(encoding="utf-8"))
+
+    def test_import_applies_exif_orientation(self):
+        original = Image.new("RGB", (16, 12), "white")
+        exif = original.getexif()
+        exif[274] = 6
+        original.save(self.source / "rotation.jpg", exif=exif)
+        destination = import_sharex(self.source, self.output)
+        with Image.open(destination / "captures/000001.png") as capture:
+            self.assertEqual(capture.size, (12, 16))
 
     def test_corrupt_image_reports_source_and_retains_partial_output(self):
         self.make_image("valid.png", 1000, "white")

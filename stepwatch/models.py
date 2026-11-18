@@ -1,4 +1,4 @@
-"""Value objects shared by the interface, capture engine and Windows backend.
+"""Value objects shared by the interface, capture engine and backends.
 
 All rectangles use physical pixels. A target rectangle uses desktop coordinates
 (which can be negative); a privacy mask uses coordinates relative to the target.
@@ -67,13 +67,15 @@ class CaptureTarget:
     hwnd: int | None = None
 
     def __post_init__(self) -> None:
-        if self.kind not in {"window", "monitor", "region"}:
+        if self.kind not in {"window", "monitor", "region", "portal"}:
             raise ValueError("Type de cible inconnu.")
         if self.kind == "window" and (isinstance(self.hwnd, bool) or not isinstance(self.hwnd, int)
                                       or self.hwnd <= 0):
-            raise ValueError("Une fenêtre doit posséder un identifiant Windows valide.")
-        if self.kind != "window" and not isinstance(self.rect, Rect):
+            raise ValueError("Une fenêtre doit posséder un identifiant valide.")
+        if self.kind in {"monitor", "region"} and not isinstance(self.rect, Rect):
             raise ValueError("Un moniteur ou une zone doit posséder un rectangle valide.")
+        if self.kind == "portal" and (self.rect is not None or self.hwnd is not None):
+            raise ValueError("La cible Wayland doit être choisie dans le portail du bureau.")
 
 
 @dataclass(frozen=True)

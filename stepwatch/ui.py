@@ -20,7 +20,7 @@ from .display import WINDOW_CLASS
 from .engine import Recorder
 from .imaging import preview_image
 from .models import CaptureConfig, CaptureTarget, Rect
-from .platform import WindowsBackend
+from .platform import capture_backend_factory
 from .review import SessionReview
 from .storage import SessionStore, export_markdown, export_standalone, import_sharex
 
@@ -30,14 +30,17 @@ LOGGER = logging.getLogger(__name__)
 class StepWatchApp:
     """Fenêtre principale ; les enregistrements ne démarrent que sur demande."""
 
+    VISUAL_MODE = "Changements visuels uniquement"
     MODES = {
         "Hybride · clics et changements": "hybrid",
         "Clics locaux uniquement": "clicks",
-        "Changements visuels uniquement": "visual",
+        VISUAL_MODE: "visual",
     }
     SOURCES = ("Fenêtre", "Moniteur", "Zone personnalisée")
+    ACTIVE_STATES = {"starting", "recording", "paused", "stopping"}
     STATE_NAMES = {
         "idle": "Prêt",
+        "starting": "Démarrage de l’enregistrement…",
         "recording": "Enregistrement en cours",
         "paused": "En pause",
         "stopping": "Arrêt en cours…",
@@ -58,9 +61,13 @@ class StepWatchApp:
         self._scale = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
         self._fit_to_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
-        self._backend = WindowsBackend()
+        self._backend_factory = capture_backend_factory()
+        self._backend = self._backend_factory() if self._backend_factory is not None else None
+        self._uses_portal = getattr(self._backend, "uses_portal", False) is True
         self._recorder: Recorder | None = None
         self._targets: list[CaptureTarget] = []
+        self._listed_source: str | None = None
+        self._needs_target_selection = False
         self._last_image: Image.Image | None = None
         self._photo: ImageTk.PhotoImage | None = None
         self._preview_key: tuple[Image.Image, int, int] | None = None
@@ -79,7 +86,7 @@ class StepWatchApp:
         self.output = tk.StringVar(value=str(Path.home() / "Documents" / "StepWatch"))
         self.source = tk.StringVar(value=self.SOURCES[0])
         self.target = tk.StringVar()
-        self.mode = tk.StringVar(value=next(iter(self.MODES)))
+        self.mode = tk.StringVar(value=self.VISUAL_MODE if self._uses_portal else next(iter(self.MODES)))
         self.interval = tk.StringVar(value="1,0")
         self.delay = tk.StringVar(value="0,35")
         self.sensitivity = tk.StringVar(value="2,0")
@@ -229,29 +236,25 @@ class StepWatchApp:
         selection = ttk.LabelFrame(left, text="Zone de capture")
         selection.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         selection.columnconfigure(0, weight=1)
-        choice = self._setting(ttk.Combobox(selection, textvariable=self.source, values=self.SOURCES, state="readonly"), "readonly")
-        choice.grid(row=0, column=0, sticky="ew")
-        choice.bind("<<ComboboxSelected>>", lambda _event: self._refresh_targets())
-        self.refresh_button = self._setting(ttk.Button(selection, text="Actualiser", command=self._refresh_targets))
-        self.refresh_button.grid(row=0, column=1, padx=(6, 0))
-        self.target_combo = self._setting(ttk.Combobox(selection, textvariable=self.target, state="readonly"), "readonly")
-        self.target_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-
-        self.region_frame = ttk.Frame(selection)
-        self.region_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        for index, label in enumerate(("X", "Y", "Largeur", "Hauteur")):
-            self.region_frame.columnconfigure(index, weight=1)
-            ttk.Label(self.region_frame, text=label).grid(row=0, column=index, sticky="w")
-            self._setting(ttk.Entry(self.region_frame, textvariable=self.region_values[index], width=8)).grid(row=1, column=index, sticky="ew", padx=(0, 5 if index < 3 else 0))
-        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        if self._uses_portal:
+            ttk.Label(selection, text="Le portail Wayland vous propose de choisir un écran ou une fenêtre au démarrage.",
+                      style="Muted.TLabel", wraplength=self._px(380)).grid(sticky="w")
+        else:
+            self._build_target_choices(selection)
 
         capture = ttk.LabelFrame(left, text="Déclenchement")
         capture.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         capture.columnconfigure(0, weight=1)
-        self._setting(ttk.Combobox(capture, textvariable=self.mode, values=tuple(self.MODES), state="readonly"), "readonly").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        for col, (title, variable) in enumerate((("Intervalle (s)", self.interval), ("Délai clic (s)", self.delay), ("Seuil (%)", self.sensitivity))):
+        fields = [("Intervalle (s)", self.interval)]
+        if self._uses_portal:
+            ttk.Label(capture, text=self.VISUAL_MODE).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        else:
+            self._setting(ttk.Combobox(capture, textvariable=self.mode, values=tuple(self.MODES), state="readonly"), "readonly").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+            fields.append(("Délai clic (s)", self.delay))
+        fields.append(("Seuil (%)", self.sensitivity))
+        for col, (title, variable) in enumerate(fields):
             ttk.Label(capture, text=title).grid(row=1, column=col, sticky="w", padx=(0, 8))
-            self._setting(ttk.Entry(capture, textvariable=variable, width=9)).grid(row=2, column=col, sticky="ew", padx=(0, 8 if col < 2 else 0))
+            self._setting(ttk.Entry(capture, textvariable=variable, width=9)).grid(row=2, column=col, sticky="ew", padx=(0, 8 if col < len(fields) - 1 else 0))
             capture.columnconfigure(col, weight=1)
         self._setting(ttk.Checkbutton(capture, text="Mode conservateur · détecter les petits changements", variable=self.conservative)).grid(row=3, column=0, columnspan=3, sticky="w", pady=(9, 0))
         ttk.Label(capture, text="Un seuil plus bas conserve davantage de changements visuels.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=4, column=0, columnspan=3, sticky="w", pady=(5, 0))
@@ -274,12 +277,13 @@ class StepWatchApp:
         preview.rowconfigure(1, weight=1)
         ttk.Label(preview, text="Dernière capture", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
         # The image must not determine the label's requested size.
-        empty_preview = ("L’aperçu apparaîtra après la première capture." if sys.platform == "win32"
+        empty_preview = ("L’aperçu apparaîtra après la première capture." if self._backend is not None
                          else "Importez un dossier ShareX pour le consulter dans Étapes.")
         self.preview = tk.Label(preview, text=empty_preview,
                                 bg="#132432", fg="#d9e9ee", font=(self._ui_font, 10), width=1, height=1)
         self.preview.grid(row=1, column=0, sticky="nsew")
         self.preview.bind("<Configure>", self._draw_preview)
+        self.preview.bind("<Map>", self._draw_preview)
 
         self._review = SessionReview(self._tabs, choose_session=self._choose_session,
                                      on_loaded=self._use_session, on_error=self._review_error, font=self._ui_font)
@@ -306,9 +310,28 @@ class StepWatchApp:
         self.export_button.grid(row=0, column=2, padx=(6, 0))
 
         footer = "Les fenêtres capturées doivent rester visibles. Les masques sont appliqués avant l’enregistrement."
-        if sys.platform != "win32":
-            footer = "Import ShareX, relecture et rapports disponibles. La capture nécessite Windows."
+        if self._uses_portal:
+            footer = "La source est partagée avec votre accord. Les masques sont appliqués avant l’enregistrement."
+        elif self._backend is None:
+            footer = "Import ShareX, relecture et rapports disponibles. La capture nécessite Windows, X11 ou Wayland."
         ttk.Label(outer, text=footer, style="Muted.TLabel", wraplength=self._px(840)).grid(row=4, column=0, sticky="w", pady=(8, 0))
+
+    def _build_target_choices(self, selection: ttk.LabelFrame) -> None:
+        choice = self._setting(ttk.Combobox(selection, textvariable=self.source, values=self.SOURCES, state="readonly"), "readonly")
+        choice.grid(row=0, column=0, sticky="ew")
+        choice.bind("<<ComboboxSelected>>", lambda _event: self._refresh_targets())
+        self.refresh_button = self._setting(ttk.Button(selection, text="Actualiser", command=self._refresh_targets))
+        self.refresh_button.grid(row=0, column=1, padx=(6, 0))
+        self.target_combo = self._setting(ttk.Combobox(selection, textvariable=self.target, state="readonly"), "readonly")
+        self.target_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+        self.region_frame = ttk.Frame(selection)
+        self.region_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        for index, label in enumerate(("X", "Y", "Largeur", "Hauteur")):
+            self.region_frame.columnconfigure(index, weight=1)
+            ttk.Label(self.region_frame, text=label).grid(row=0, column=index, sticky="w")
+            self._setting(ttk.Entry(self.region_frame, textvariable=self.region_values[index], width=8)).grid(row=1, column=index, sticky="ew", padx=(0, 5 if index < 3 else 0))
+        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
 
     def _write_log(self, message: str, level: int | None = logging.INFO) -> None:
         """Ajoute une ligne au journal de l’interface et, si level, au journal de diagnostic."""
@@ -325,28 +348,52 @@ class StepWatchApp:
         self.log.configure(state="disabled")
 
     def _refresh_targets(self) -> None:
-        if self._active():
+        if self._active() or self._backend is None or self._uses_portal:
             return
-        custom = self.source.get() == "Zone personnalisée"
+        source = self.source.get()
+        custom = source == "Zone personnalisée"
+        index = self.target_combo.current()
+        previous = None
+        if source != self._listed_source:
+            self._listed_source = source
+            self._needs_target_selection = False
+        elif 0 <= index < len(self._targets):
+            previous = self._targets[index]
         self.region_frame.grid() if custom else self.region_frame.grid_remove()
         self.target_combo.configure(state="disabled" if custom else "readonly")
         self.refresh_button.configure(state="disabled" if custom else "normal")
         if custom:
             self._targets = []
             self.target.set("Coordonnées personnalisées")
+            self._update_controls()
             return
-        previous = self.target.get()
         try:
             # L’énumération des fenêtres est indépendante de celle des moniteurs.
-            self._targets = self._backend.list_windows() if self.source.get() == "Fenêtre" else self._backend.list_monitors()
+            self._targets = self._backend.list_windows() if source == "Fenêtre" else self._backend.list_monitors()
         except Exception as exc:
             self._targets = []
             self._write_log(f"Énumération impossible : {exc}")
         labels = [f"{index + 1}. {target.label}" for index, target in enumerate(self._targets)]
         self.target_combo.configure(values=labels)
-        self.target.set(previous if previous in labels else labels[0] if labels else "Aucune cible disponible")
+        if previous is not None:
+            for index, target in enumerate(self._targets):
+                if previous.kind == target.kind and (previous.hwnd == target.hwnd if target.kind == "window"
+                                                     else previous.rect == target.rect):
+                    self.target_combo.current(index)
+                    self._needs_target_selection = False
+                    break
+            else:
+                self._needs_target_selection = True
+        elif labels and not self._needs_target_selection:
+            self.target_combo.current(0)
         if not labels:
+            self.target.set("Aucune cible disponible")
             self._write_log("Aucune cible. Actualisez la liste après avoir ouvert une fenêtre visible.")
+        elif self._needs_target_selection:
+            self.target.set("Sélectionnez une cible")
+            if previous is not None:
+                self._write_log("La cible sélectionnée a disparu. Choisissez une nouvelle cible.")
+        self._update_controls()
 
     def _choose_output(self) -> None:
         selected = filedialog.askdirectory(parent=self.root, title="Dossier des interventions", initialdir=self.output.get() if Path(self.output.get()).is_dir() else None)
@@ -406,7 +453,9 @@ class StepWatchApp:
         return directory
 
     def _read_config(self) -> tuple[CaptureTarget, CaptureConfig]:
-        if self.source.get() == "Zone personnalisée":
+        if self._uses_portal:
+            target = CaptureTarget(kind="portal", label="Écran ou fenêtre via le portail")
+        elif self.source.get() == "Zone personnalisée":
             names = ("X de la zone", "Y de la zone", "Largeur de la zone", "Hauteur de la zone")
             rect = Rect(*(self._integer(variable.get(), name)
                           for variable, name in zip(self.region_values, names)))
@@ -432,9 +481,9 @@ class StepWatchApp:
                 raise ValueError(f"Masque ligne {line_number} : X et Y doivent être positifs ou nuls.")
             masks.append(mask)
         config = CaptureConfig(
-            mode=self.MODES[self.mode.get()],
+            mode="visual" if self._uses_portal else self.MODES[self.mode.get()],
             interval=self._number(self.interval.get(), "Intervalle de comparaison"),
-            click_delay=self._number(self.delay.get(), "Délai après clic"),
+            click_delay=0 if self._uses_portal else self._number(self.delay.get(), "Délai après clic"),
             sensitivity=self._number(self.sensitivity.get(), "Seuil de changement"),
             conservative=self.conservative.get(),
             masks=tuple(masks),
@@ -442,7 +491,7 @@ class StepWatchApp:
         return target, config
 
     def _active(self) -> bool:
-        return self._recorder is not None and self._recorder.state in {"recording", "paused", "stopping"}
+        return self._recorder is not None and self._recorder.state in self.ACTIVE_STATES
 
     def _start(self) -> None:
         if self._active() or self._closing or self._background_running():
@@ -454,16 +503,17 @@ class StepWatchApp:
         store = None
         recorder = None
         try:
-            if sys.platform != "win32":
-                raise RuntimeError("L’enregistrement natif nécessite Windows. Vous pouvez importer un dossier ShareX sur ce système.")
+            if self._backend is None:
+                raise RuntimeError("L’enregistrement est indisponible dans cette session. Vous pouvez importer un dossier ShareX.")
             if not self.name.get().strip():
                 raise ValueError("Indiquez un nom d’intervention.")
             output = self._output_dir()
             target, config = self._read_config()
             # Validation préalable : ne crée pas de dossier pour une cible déjà fermée.
-            self._backend.resolve(target)
+            if not self._uses_portal:
+                self._backend.resolve(target)
             store = SessionStore(output, self.name.get().strip())
-            recorder = Recorder(target, config, store)
+            recorder = Recorder(target, config, store, backend_factory=self._backend_factory)
             self._recorder = recorder
             self._review.clear()
             self._tabs.select(0)
@@ -530,9 +580,9 @@ class StepWatchApp:
 
     def _update_controls(self) -> None:
         state = self._recorder.state if self._recorder is not None else "idle"
-        active = state in {"recording", "paused", "stopping"}
+        active = state in self.ACTIVE_STATES
         busy = self._closing or self._background_running()
-        if (self._last_state in {"recording", "paused", "stopping"} and state == "stopped"
+        if (self._last_state in self.ACTIVE_STATES and state == "stopped"
                 and not self._closing):
             self._show_review()
             busy = self._background_running()
@@ -540,10 +590,10 @@ class StepWatchApp:
         key = state, busy, self._closing, self._session_dir, self.source.get()
         if key == self._controls_key:
             return
-        self.start_button.configure(state="disabled" if active or busy or sys.platform != "win32" else "normal")
+        self.start_button.configure(state="disabled" if active or busy or self._backend is None else "normal")
         self.pause_button.configure(state="normal" if state == "recording" and not self._closing else "disabled")
         self.resume_button.configure(state="normal" if state == "paused" and not self._closing else "disabled")
-        self.stop_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
+        self.stop_button.configure(state="normal" if state in {"starting", "recording", "paused"} and not self._closing else "disabled")
         self.note_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
         self.import_button.configure(state="disabled" if active or busy else "normal")
         self._review.open_button.configure(state="disabled" if active or busy else "normal")
@@ -552,22 +602,24 @@ class StepWatchApp:
         self.export_button.configure(state="normal" if exportable else "disabled")
         for widget, normal_state in self._settings_widgets:
             widget.configure(state="disabled" if active or busy else normal_state)
-        if not active and not busy:
+        if not active and not busy and not self._uses_portal:
             custom = self.source.get() == "Zone personnalisée"
-            self.target_combo.configure(state="disabled" if custom else "readonly")
-            self.refresh_button.configure(state="disabled" if custom else "normal")
+            self.target_combo.configure(state="disabled" if custom or self._backend is None else "readonly")
+            self.refresh_button.configure(state="disabled" if custom or self._backend is None else "normal")
         if self._closing:
             self.state_text.set("Fermeture en cours · finalisation des fichiers…")
         elif self._import_thread is not None and self._import_thread.is_alive():
             self.state_text.set("Import ShareX en cours…")
         elif self._export_thread is not None and self._export_thread.is_alive():
             self.state_text.set("Export du rapport autonome en cours…")
+        elif state == "starting" and self._uses_portal:
+            self.state_text.set("Choisissez l’écran ou la fenêtre à partager…")
         else:
             self.state_text.set(self.STATE_NAMES.get(state, state))
         self._controls_key = key
 
     def _draw_preview(self, _event: tk.Event | None = None) -> None:
-        if self._last_image is None:
+        if self._last_image is None or not self.preview.winfo_ismapped():
             return
         width, height = max(self.preview.winfo_width() - 12, 1), max(self.preview.winfo_height() - 12, 1)
         previous = self._preview_key
@@ -782,10 +834,11 @@ class StepWatchApp:
         callback = self.root.__dict__.get("report_callback_exception")
         if getattr(callback, "__self__", None) is self:
             del self.root.report_callback_exception
-        try:
-            self._backend.close()
-        except Exception:
-            LOGGER.exception("Fermeture des ressources de sélection impossible")
+        if self._backend is not None:
+            try:
+                self._backend.close()
+            except Exception:
+                LOGGER.exception("Fermeture des ressources de sélection impossible")
         if self._poll_id is not None:
             try:
                 self.root.after_cancel(self._poll_id)

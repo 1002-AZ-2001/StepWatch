@@ -1,13 +1,15 @@
 # Architecture de StepWatch
 
-StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en français. Les dépendances d'exécution sont Pillow, `mss` et `pynput` (Windows uniquement). Aucun service réseau, serveur ou compte externe n'est nécessaire.
+StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en français. La capture utilise Pillow pour les traitements et `mss` pour les images sous Windows et X11. Les clics passent par `pynput` sous Windows et par Xlib sous X11. La capture Wayland utilise le portail de partage du bureau, PipeWire et GStreamer. [Dépendances par distribution](distribution.md)
 
 ## Modules
 
 | Module | Responsabilité |
 | --- | --- |
-| `models.py` | Cibles (fenêtre, moniteur, zone), rectangles et paramètres validés. Toutes les coordonnées sont en pixels physiques. |
-| `platform.py` | Énumération des fenêtres Win32, DPI par moniteur, capture MSS, rattachement d'un clic à la fenêtre cible ou à ses dialogues, état physique des boutons pour la surveillance du hook. |
+| `models.py` | Cibles, rectangles et réglages validés. Les coordonnées de capture et de masquage utilisent les pixels de l'image. |
+| `platform.py` | Sélection du moteur selon le système et la session. Sur Windows, sélection des fenêtres, DPI par moniteur, capture MSS, localisation des clics et surveillance du hook. |
+| `x11.py` | Géométrie des cibles via Xlib, réception des clics via RECORD et capture MSS des pixels visibles. |
+| `wayland.py`, `_wayland_portal.py` | Demande de partage via ScreenCast, lecture du flux PipeWire avec GStreamer et retour des images au moteur. Le script utilise le Python et les bibliothèques du bureau. |
 | `imaging.py` | Masquage, marqueurs de clic et comparaison visuelle (sous-échantillonnée en mode normal, pleine résolution en mode conservateur). |
 | `engine.py` | Capture, comparaison, suivi du hook et mise en ordre des écritures sur un second thread. |
 | `events.py` | File d'événements qui ne garde qu'un aperçu en attente, sans perdre les messages ni les erreurs. |
@@ -15,12 +17,12 @@ StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en fra
 | `ui.py` | Fenêtre principale ; tous les appels Tk restent sur le thread principal. |
 | `review.py` | Liste paginée des étapes d'une session et lecture de la seule image sélectionnée. |
 | `display.py` | Type de session (X11, Wayland) et message explicite quand Tk ne peut pas s'afficher, par exemple sous Wayland sans XWayland ; classe de fenêtre `Stepwatch` pour les docks. |
-| `selftest.py` | `stepwatch --self-test` : session synthétique, rapports, import ShareX, puis ouverture et fermeture de la vraie fenêtre. Sans réseau ni données personnelles. |
+| `selftest.py` | `stepwatch --self-test` vérifie une session synthétique, les rapports, un import ShareX et l'interface. Sous X11, il vérifie aussi une capture réelle de la fenêtre d'auto-test. |
 | `diagnostics.py` | Journal local en rotation et capture des exceptions non gérées (threads, rappels Tk, plantages natifs). |
 
 ## Threads et flux d'une capture
 
-1. Le **hook souris** (thread `pynput`) reçoit un clic. Il localise immédiatement le clic par rapport à la cible, avant que l'application ne réagisse (menu, dialogue), puis le met en file. Il n'écrit rien sur disque.
+1. Sous Windows et X11, le **thread souris** localise le clic par rapport à la cible dès sa réception, puis le met dans une file bornée. Sous Wayland, le moteur commence ses comparaisons à partir du flux autorisé par l'utilisateur.
 2. Le **thread de capture** (`StepWatch-capture`) dépile les clics, regroupe les doubles-clics, attend le délai après clic et capture la zone. Il masque l'image, compare si nécessaire puis ajoute le marqueur. La comparaison normale réutilise la référence en basse résolution et saute les filtres pour des images identiques. Le mode conservateur traite les différences par bandes à pleine résolution.
 3. Le **thread d'écriture** encode le PNG, écrit les rapports et prépare la miniature. Le traitement de la capture suivante peut avancer sur un autre cœur. Une seule écriture est soumise à la fois, dans l'ordre des captures. Un rapport verrouillé est réessayé à la capture suivante et à l'arrêt.
 4. L'**interface** traite jusqu'à 100 événements par passage. Elle actualise les commandes quand leur état change, et lit les événements moins souvent au repos. En relecture, une page contient au plus 48 étapes et les aperçus sont chargés un par un sur demande.

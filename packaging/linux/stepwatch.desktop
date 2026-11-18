@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=StepWatch
-Comment=Import ShareX and offline intervention reports; recording requires Windows
-Comment[fr]=Import ShareX et rapports hors ligne ; enregistrement réservé à Windows
+Comment=Screen recording, ShareX import and offline intervention reports
+Comment[fr]=Capture d’écran, import ShareX et rapports d’intervention hors ligne
 Exec=/usr/bin/stepwatch
 Icon=stepwatch
 Terminal=false

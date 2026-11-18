@@ -1,6 +1,7 @@
 """Wayland/X11 session checks and the packaged self-test."""
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,7 @@ class DisplayTests(unittest.TestCase):
         self.assertIn("XWayland", message)
         self.assertIn("xwayland", message)
         self.assertIn("xorg-xwayland", message)
+        self.assertIn("XWayland", display_problem("linux", {"XDG_SESSION_TYPE": "wayland"}))
 
     def test_no_graphical_session_is_explained(self):
         self.assertIn("Aucun affichage", display_problem("linux", {}))
@@ -34,6 +36,7 @@ class DisplayTests(unittest.TestCase):
     def test_session_type(self):
         self.assertEqual(session_type({"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"}), "wayland")
         self.assertEqual(session_type({"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"}), "wayland")
+        self.assertEqual(session_type({"WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "x11"}), "wayland")
         self.assertEqual(session_type({"DISPLAY": ":0"}), "x11")
         self.assertEqual(session_type({"XDG_SESSION_TYPE": "tty"}), "inconnue")
 
@@ -69,6 +72,8 @@ class SelfTestTests(unittest.TestCase):
         messages = []
         self.assertEqual(selftest.run(messages.append), 0)
         self.assertIn("Interface Tk : OK", messages)
+        if sys.platform.startswith("linux") and session_type() == "x11":
+            self.assertIn("Capture X11 : OK", messages)
 
 
 if __name__ == "__main__":

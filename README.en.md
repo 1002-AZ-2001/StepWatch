@@ -2,24 +2,32 @@
 
 *[Version française](README.md)*
 
-StepWatch documents an IT support session step by step, using the pixels visible on the technician's Windows workstation. Each local click or visual change becomes an annotated screenshot, and the HTML report can be read offline. Screenshots and reports remain on the workstation: no agent is installed on the client's computer, and nothing is sent over the Internet.
+StepWatch documents IT support sessions with automatic screenshots, notes and an offline report. It runs on the technician's workstation during local and remote support.
 
-StepWatch uses Python, Tkinter, Pillow, `mss` and `pynput`. No keystroke is recorded, and sensitive areas can be masked before images are written. Microsoft has deprecated the Windows Steps Recorder (`psr.exe`); StepWatch is a local alternative designed for remote support.
+Mask sensitive areas before recording, then use the **Étapes** (Steps) tab to review the session and export a standalone HTML or Markdown report. Screenshots and reports stay on the workstation.
 
 The application interface and the documentation in `docs/` are in French.
 
-![StepWatch on Linux after importing synthetic screenshots](docs/stepwatch.png)
+[Download the latest version](https://github.com/1002-AZ-2001/StepWatch/releases/latest) · [Record a support session](#record-a-support-session)
+
+| System | Capture |
+| --- | --- |
+| Windows 10/11 | Local clicks and visual changes for a window, monitor or region. |
+| Linux X11 | Local clicks and visual changes for a visible window, monitor or region. |
+| Linux Wayland | Visual changes from the screen or window shared through the desktop portal. The app window uses XWayland. [Wayland setup in French](docs/distribution.md#wayland) |
+
+![Reviewing a demonstration session recorded on X11](docs/stepwatch.png)
 
 ## Download
 
-Executables are published in the [Releases](https://github.com/1002-AZ-2001/StepWatch/releases). The [latest release](https://github.com/1002-AZ-2001/StepWatch/releases/latest) provides:
+The latest release includes Windows executables, Linux packages and their checksums. [GitHub Releases](https://github.com/1002-AZ-2001/StepWatch/releases)
 
 | File | For |
 | --- | --- |
-| `StepWatch-VERSION-windows-x64.exe` | Windows 10/11: a single file, no installation. |
-| `StepWatch-VERSION-windows-x64-portable.zip` | Windows: portable folder, extract it entirely. |
-| `stepwatch_VERSION_amd64.deb` | Debian 12+ and Ubuntu 22.04+: ShareX import and reports only. |
-| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux: ShareX import and reports only. |
+| `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, single file. |
+| `StepWatch-VERSION-windows-x64-portable.zip` | Windows x64, extract the entire portable folder. |
+| `stepwatch_VERSION_amd64.deb` | Debian 12+ and Ubuntu 22.04+. |
+| `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux. |
 | `SHA256SUMS-*.txt` | Download verification. |
 
 Python is bundled. The Windows executables are not signed yet, so SmartScreen may show a warning: check the SHA-256 first. Installation, verification and building from source are described in the [distribution guide](docs/distribution.md) (French).
@@ -33,8 +41,6 @@ sudo pacman -U ./stepwatch-VERSION-1-x86_64.pkg.tar.zst
 stepwatch
 stepwatch --self-test
 ```
-
-**Recording requires Windows.** On Linux, the interface only offers the ShareX import and the reports, in X11 and **Wayland** sessions alike. On Wayland, StepWatch is displayed through XWayland, available by default on most desktops: see the [distribution guide](docs/distribution.md#wayland) (French).
 
 ### From source, on Windows
 
@@ -53,19 +59,29 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m stepwatch
 ```
 
+### From source, on Linux
+
+Use Python 3.11 or later with venv and Tkinter. For Wayland recording, also install the desktop capture dependencies. [Linux distribution guide in French](docs/distribution.md#linux--debian-ubuntu-et-arch-linux)
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m stepwatch
+```
+
 ## Record a support session
 
 1. Enter a name and choose the reports folder.
-2. Select a window, a monitor or a region. **Actualiser** (Refresh) reloads the list. Coordinates are physical pixels; a monitor placed on the left can have a negative origin.
-3. Choose a mode: **Hybride** (local clicks and visual changes), clicks only, or visual changes only.
-4. Set the delay after a click, the comparison interval and the threshold. The threshold is a proportion of changed pixels: the lower it is, the more steps StepWatch keeps. Conservative mode detects small changes.
-5. Add masks if needed, one per line: `x,y,width,height`, relative to the top-left corner of the capture. Click **Démarrer** (Start); nothing is captured before that.
+2. On Windows and X11, select a window, monitor or region. **Actualiser** (Refresh) reloads the list. Coordinates are physical pixels. A monitor on the left can have a negative origin.
+3. Choose **Hybride** (local clicks and visual changes), clicks only, or visual changes only. Wayland sessions use visual changes mode.
+4. Set the comparison interval, threshold and click delay if applicable. A lower threshold keeps more steps. Conservative mode detects small changes.
+5. To hide parts of the image, enter one mask per line as `x,y,width,height` relative to the top-left corner. Click **Démarrer** (Start). On Wayland, choose a source in the desktop picker and allow sharing.
 6. Use **Pause**, **Reprendre** (Resume) and **Arrêter** (Stop). The preview, counters and log show kept screenshots, ignored comparisons and errors.
 7. **Ajouter une note** (Add a note) attaches free text to the latest step, while recording or paused.
 8. After stopping, use **Étapes** (Steps) to review each screenshot, timestamp, and note. **Ouvrir une session** (Open session) reopens an existing folder with `steps.json`.
 9. **Ouvrir le dossier** (Open folder) shows the session files. **Rapport autonome** (Standalone report) produces a single HTML file you can attach to a ticket.
 
-A double-click or triple-click becomes a single "local double-click" step, captured after the last press. For AnyDesk, TeamViewer or RDP, select the local window of the remote support software. An action by the remote client becomes a "visual change detected": StepWatch cannot know where that click happened, and markers only show local clicks.
+The recorder groups rapid presses into a single local double-click step. A second press received after the first screenshot can produce another step. For AnyDesk, TeamViewer or RDP, select the local window of the remote support software. Actions by the remote client can produce visual change steps. Markers show local clicks.
 
 ## Screenshots and reports
 
@@ -87,12 +103,13 @@ Screenshots may contain confidential data. Choose a suitable folder and manage i
 
 If an antivirus or a sync tool briefly locks a file, the write is retried. If the report stays locked, the PNG is kept and recording continues; the report is rewritten at the next capture and when recording stops.
 
-## Windows capture limitations
+## Capture limitations
 
-- The capture uses the pixels of the visible desktop: keep the target window unobstructed, or an overlapping window will appear in the image.
+- On Windows and X11, keep the target window unobstructed. An overlapping window can appear in the capture.
+- When StepWatch is visible on a shared display, updating its preview can trigger another capture.
 - A click belongs to the target only if it lands on it or on a dialog it owns.
 - A closed, minimised or hidden window produces an explicit error in the log.
-- The UAC secure desktop, protected content and elevated windows can prevent capture or click reception.
+- On Windows, the UAC secure desktop, protected content and elevated windows can prevent capture or click reception.
 - Windows can silently remove a slow low-level mouse hook. StepWatch detects this through the physical button state, reinstalls the hook and reports it ("des clics ont pu manquer", clicks may have been missed): check the latest steps.
 - The visual comparison ignores small variations, without a guarantee for every animation. A change shorter than the interval can go unnoticed.
 
@@ -104,7 +121,7 @@ The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/ste
 
 - [Architecture](docs/architecture.md): modules, threads and guarantees.
 - [Validation](docs/validation.md): automated tests, CI, real Windows checklist and measurements.
-- [Distribution](docs/distribution.md): building executables and publishing a new version (one release per version).
+- A new version on `main` triggers package builds and publication after the tests pass. [Release guide in French](docs/distribution.md#publier-une-nouvelle-version)
 - [Roadmap](docs/FEUILLE_DE_ROUTE.md): recent releases, report editing, capture reliability and distribution.
 - [Changelog](CHANGELOG.md) and [project history](docs/HISTORIQUE.md).
 
@@ -114,7 +131,7 @@ The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/ste
 DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The images in this README come from a real run on Linux with synthetic screenshots: the interface after a ShareX import, and a report produced by StepWatch's storage code.
+The images in this README show a demonstration session and report with synthetic data.
 
 Thanks to DokT for the first English translation.
 

@@ -45,12 +45,17 @@ def pkgbuild(version: str, glibc: str, archive: str, digest: str) -> str:
 pkgname=stepwatch
 pkgver={version}
 pkgrel=1
-pkgdesc="Import ShareX et rapports d'intervention hors ligne (enregistrement réservé à Windows)"
+pkgdesc="Capture d'écran, import ShareX et rapports d'intervention hors ligne"
 arch=('x86_64')
 url="https://github.com/1002-AZ-2001/StepWatch"
 license=('AGPL-3.0-only')
 depends=({depends})
-optdepends=('xorg-xwayland: affichage dans une session Wayland')
+optdepends=('xorg-xwayland: affichage dans une session Wayland'
+            'python-gobject: accès au portail et à GStreamer sous Wayland'
+            'gst-plugins-base: traitement des images du flux Wayland'
+            'gst-plugin-pipewire: réception du flux Wayland'
+            'pipewire: serveur de capture Wayland'
+            'xdg-desktop-portal: sélection de la source Wayland avec le portail du bureau')
 # PyInstaller bundle: stripping its binaries can break the application.
 options=('!strip' '!debug')
 source=("{archive}")
@@ -82,7 +87,8 @@ def prepare(bundle: Path, output: Path, version: str | None = None,
         with tarfile.open(output / archive, "w:gz") as tar:
             tar.add(staging, arcname="root", filter=_root_owned)
             tar.add(Path(temporary) / "LICENSE", arcname="LICENSE", filter=_root_owned)
-    digest = hashlib.sha256((output / archive).read_bytes()).hexdigest()
+    with (output / archive).open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
     (output / "PKGBUILD").write_text(pkgbuild(version, glibc, archive, digest), encoding="utf-8")
     return output / "PKGBUILD"
 

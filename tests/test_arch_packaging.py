@@ -35,6 +35,8 @@ class ArchPackagingTests(unittest.TestCase):
         self.assertIn("license=('AGPL-3.0-only')", pkgbuild)
         self.assertIn("'glibc>=2.35' 'libx11'", pkgbuild)
         self.assertIn("optdepends=('xorg-xwayland:", pkgbuild)
+        self.assertIn("'gst-plugin-pipewire:", pkgbuild)
+        self.assertIn("'xdg-desktop-portal:", pkgbuild)
         self.assertIn("options=('!strip' '!debug')", pkgbuild)
         self.assertIn(f"sha256sums=('{hashlib.sha256(archive.read_bytes()).hexdigest()}')", pkgbuild)
         self.assertIn('cp -a --no-preserve=ownership "$srcdir/root/." "$pkgdir/"', pkgbuild)

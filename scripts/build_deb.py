@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Freeze StepWatch and produce an amd64 Debian package without root access.
 
-Build on Ubuntu 22.04 (glibc 2.35) for the supported runtime baseline. The
-packaged Linux UI supports ShareX imports and reports; recording needs Windows.
+Build on Ubuntu 22.04 (glibc 2.35) for the supported runtime baseline.
 An existing PyInstaller onedir can be reused with --bundle /path/to/StepWatch.
 """
 
@@ -26,7 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "packaging" / "linux"
 DEPENDENCIES = (
     "libx11-6, libxext6, libxrender1, libxss1, libxft2, libxcb1, "
+    "libxcb-randr0, libxcb-render0, libxcb-shm0, libxcb-xfixes0, "
     "libfontconfig1, libfreetype6, libexpat1, zlib1g"
+)
+WAYLAND_SUGGESTS = (
+    "xwayland, python3-gi, gir1.2-gstreamer-1.0, gir1.2-gst-plugins-base-1.0, "
+    "gstreamer1.0-plugins-base, gstreamer1.0-pipewire, pipewire, xdg-desktop-portal"
 )
 
 #: X11 and font libraries that PyInstaller copies from the build host. They
@@ -182,12 +186,12 @@ def stage_package(bundle: Path, staging: Path, version: str) -> None:
         "Maintainer: StepWatch project <1002-AZ-2001@users.noreply.github.com>\n"
         "Homepage: https://github.com/1002-AZ-2001/StepWatch\n"
         f"Installed-Size: {installed_size}\nDepends: libc6 (>= {minimum_glibc()}), {DEPENDENCIES}\n"
-        "Suggests: xwayland\n"
-        "Description: Local ShareX imports and offline intervention reports\n"
+        f"Suggests: {WAYLAND_SUGGESTS}\n"
+        "Description: Local screen recording and offline intervention reports\n"
         " French desktop interface with local PNG, JSON and HTML reports.\n"
-        " Linux supports imports and reports only; recording requires Windows.\n"
-        " Runs in X11 sessions and in Wayland sessions through XWayland.\n"
-        " Python and application dependencies are bundled. No server is required.\n",
+        " Supports ShareX imports and recording on X11. In a Wayland session,\n"
+        " the interface uses XWayland and recording uses the desktop ScreenCast\n"
+        " portal with PipeWire and the suggested system packages.\n",
         encoding="utf-8",
     )
     _normalize_permissions(staging)
@@ -201,7 +205,8 @@ def freeze(work: Path) -> Path:
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
          "--name", "StepWatch", "--paths", str(ROOT),
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
-         "--specpath", str(work), *native_tcl_binaries(),
+         "--specpath", str(work), "--add-data", f"{ROOT / 'stepwatch' / '_wayland_portal.py'}:stepwatch",
+         *native_tcl_binaries(),
          str(ROOT / "stepwatch" / "__main__.py")],
         cwd=ROOT, check=True, env=build_environment,
     )
@@ -264,7 +269,6 @@ def main(argv: list[str] | None = None) -> int:
     except (PackagingError, OSError, subprocess.CalledProcessError, KeyError, tomllib.TOMLDecodeError) as exc:
         parser.exit(1, f"Échec de création du paquet : {exc}\n")
     print(f"Paquet créé : {package}")
-    print("Linux : import ShareX et rapports uniquement ; enregistrement réservé à Windows.")
     return 0
 
 

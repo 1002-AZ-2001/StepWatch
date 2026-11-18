@@ -1,4 +1,4 @@
-"""Windows window enumeration and thread-owned MSS screen capture.
+"""Capture backend selection and thread-owned Windows screen capture.
 
 Importing this module does not install hooks, open capture resources or require
 Windows. Windows calls and MSS initialization are deliberately lazy.
@@ -8,15 +8,42 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import os
 import sys
 import threading
+from collections.abc import Mapping
 from typing import Callable
 
+from .display import session_type
 from .models import CaptureTarget, Rect
 
 
 class CaptureUnavailable(RuntimeError):
     """The selected target cannot currently be captured."""
+
+
+class CaptureCancelled(CaptureUnavailable):
+    """The desktop's share dialog was cancelled before recording."""
+
+
+class CaptureEnded(CaptureUnavailable):
+    """A previously selected capture stream has closed."""
+
+
+def capture_backend_factory(platform: str | None = None,
+                            environ: Mapping[str, str] | None = None):
+    """Select a backend without opening a capture connection or input hook."""
+    platform = sys.platform if platform is None else platform
+    environ = os.environ if environ is None else environ
+    if platform == "win32":
+        return WindowsBackend
+    if not platform.startswith("linux") or not environ.get("DISPLAY"):
+        return None
+    if session_type(environ) == "wayland":
+        from .wayland import WaylandBackend
+        return WaylandBackend
+    from .x11 import X11Backend
+    return X11Backend
 
 
 def enable_dpi_awareness() -> bool:
@@ -307,9 +334,9 @@ class WindowsBackend:
                     "Replacez la fenêtre ou la zone sur un moniteur."
                 )
             screenshot = screen.grab(rectangle.as_dict())
-            # Decode MSS' native BGRA buffer in one C pass; its ``rgb``
-            # property first repacks every pixel (about 70 ms more in 4K).
-            return Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+            # Pillow decodes the native bytearray without the full-frame
+            # copies made by MSS' ``bgra`` and ``rgb`` accessors.
+            return Image.frombytes("RGB", screenshot.size, screenshot.raw, "raw", "BGRX")
         except CaptureUnavailable:
             raise
         except Exception as exc:

@@ -4,6 +4,20 @@
 
 Rien pour l'instant.
 
+## 0.6.0 — 2026-11-18
+
+StepWatch enregistre désormais les interventions sous Linux, en plus de Windows. Les captures et les rapports restent sur le poste du technicien.
+
+- Enregistrement sous **X11** avec sélection d'une fenêtre, d'un moniteur ou d'une zone et détection des clics et des changements visuels.
+- Enregistrement des changements visuels sous **Wayland** avec sélection de la source dans le portail du bureau et réception des images via PipeWire. La fenêtre StepWatch utilise XWayland.
+- L'actualisation des cibles conserve l'identité de la fenêtre sélectionnée même quand plusieurs fenêtres portent le même titre. Une cible disparue doit être resélectionnée.
+- Le décodage MSS en RGB évite une copie de 31,6 Mio par image UHD. La file de clics est bornée et signale les clics écartés quand cette limite est atteinte.
+- Un échec temporaire d'écriture des rapports lors d'un import ShareX est réessayé. L'export autonome vérifie l'intégrité des PNG avant de remplacer le rapport existant.
+- L'import ShareX traite l'orientation en place. StepWatch dessine l'aperçu de capture quand son onglet est visible.
+- La fermeture de la vue Étapes attend la fin du travail de lecture même lorsqu'une lecture a échoué avec une erreur de délai.
+
+Sur trois PNG 4K synthétiques, le pic mémoire d'import passe de 141 à 47 Mio. La capture Wayland a été testée de bout en bout sous Sway virtuel. Le guide de distribution détaille les composants du bureau nécessaires.
+
 ## 0.5.0 — 2026-11-18
 
 Cette version permet de rouvrir et relire les interventions dans StepWatch. Elle réduit aussi le travail de comparaison des captures et répartit la capture et l'encodage PNG entre deux threads.
