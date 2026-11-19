@@ -12,17 +12,19 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, simpledialog, ttk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
 from .display import WINDOW_CLASS
 from .engine import Recorder
+from .floating import FloatingBar
 from .imaging import preview_image
 from .models import CaptureConfig, CaptureTarget, Rect
-from .platform import capture_backend_factory
+from .platform import capture_backend_factory, exclude_from_capture
 from .review import SessionReview
 from .storage import SessionStore, export_markdown, export_standalone, import_sharex
+from .theme import PALETTE, STATUS_COLOURS, apply_theme, pick_fonts, render_icon
 
 LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +83,11 @@ class StepWatchApp:
         self._settings_widgets: list[tuple[tk.Widget, str]] = []
         self._controls_key = None
         self._last_state = "idle"
+        self._bar: FloatingBar | None = None
+        self._bar_excluded = False
+        self._compact_session = False
+        self._withdrawn = False
+        self._regions_key = None
 
         self.name = tk.StringVar(value="Nouvelle intervention")
         self.output = tk.StringVar(value=str(Path.home() / "Documents" / "StepWatch"))
@@ -91,6 +98,7 @@ class StepWatchApp:
         self.delay = tk.StringVar(value="0,35")
         self.sensitivity = tk.StringVar(value="2,0")
         self.conservative = tk.BooleanVar(value=False)
+        self.compact = tk.BooleanVar(value=True)
         self.region_values = [tk.StringVar(value=value) for value in ("0", "0", "1280", "720")]
         self.state_text = tk.StringVar(value="Prêt · aucun enregistrement actif")
         self.kept = tk.StringVar(value="0")
@@ -125,45 +133,13 @@ class StepWatchApp:
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
     def _style(self) -> None:
-        families = {family.casefold(): family for family in tkfont.families(self.root)}
-        default = tkfont.nametofont("TkDefaultFont", root=self.root).actual("family")
-        fixed = tkfont.nametofont("TkFixedFont", root=self.root).actual("family")
-        self._ui_font = next((families[name] for name in ("segoe ui", "dejavu sans", "liberation sans")
-                              if name in families), default)
-        self._mono_font = next((families[name] for name in ("consolas", "dejavu sans mono", "liberation mono")
-                                if name in families), fixed)
-        style = ttk.Style(self.root)
-        if "clam" in style.theme_names():
-            style.theme_use("clam")
-        self.root.configure(bg="#eef4f5")
-        style.configure("TFrame", background="#eef4f5")
-        style.configure("Card.TFrame", background="#ffffff")
-        style.configure("Header.TFrame", background="#132c39")
-        style.configure("TLabel", background="#eef4f5", foreground="#18333f", font=(self._ui_font, 10))
-        style.configure("Card.TLabel", background="#ffffff")
-        style.configure("CardTitle.TLabel", background="#ffffff", font=(self._ui_font, 13, "bold"))
-        style.configure("CardMuted.TLabel", background="#ffffff", foreground="#536874")
-        style.configure("Muted.TLabel", foreground="#53657b")
-        style.configure("Title.TLabel", background="#132c39", foreground="#ffffff", font=(self._ui_font, 19, "bold"))
-        style.configure("Status.TLabel", background="#132c39", foreground="#c5ebdf", font=(self._ui_font, 10, "bold"))
-        style.configure("Count.TLabel", background="#ffffff", font=(self._ui_font, 14, "bold"), foreground="#126c59")
-        style.configure("TButton", font=(self._ui_font, 10), padding=(12, 7))
-        style.configure("Accent.TButton", background="#147663", foreground="#ffffff")
-        style.map("Accent.TButton", background=[("disabled", "#bdd0cf"), ("active", "#0b594a")],
-                  foreground=[("disabled", "#3f5358")])
-        style.configure("TNotebook", background="#eef4f5", borderwidth=0)
-        style.configure("TNotebook.Tab", background="#e0ebed", foreground="#1d414d", padding=(18, 8),
-                        font=(self._ui_font, 10, "bold"))
-        style.map("TNotebook.Tab", background=[("selected", "#ffffff")], foreground=[("selected", "#0b5e4d")])
-        style.configure("Treeview", rowheight=self._px(31), font=(self._ui_font, 10), borderwidth=0)
-        style.map("Treeview", background=[("selected", "#d5eee6")], foreground=[("selected", "#173b38")])
-        style.configure("TLabelframe", background="#eef4f5", padding=12)
-        style.configure("TLabelframe.Label", background="#eef4f5", foreground="#18333f", font=(self._ui_font, 10, "bold"))
-        style.configure("TCheckbutton", background="#eef4f5", font=(self._ui_font, 10))
-        style.configure("TEntry", font=(self._ui_font, 10))
-        style.configure("TCombobox", font=(self._ui_font, 10))
-        style.configure("TEntry", padding=5)
-        style.configure("TCombobox", padding=5)
+        self._ui_font, self._mono_font = pick_fonts(self.root)
+        apply_theme(self.root, self._ui_font, self._px(34))
+        # Window/dock icon, drawn like packaging/linux/stepwatch.svg.
+        self._icons = [ImageTk.PhotoImage(render_icon(self._px(size)), master=self.root) for size in (64, 32, 16)]
+        self.root.iconphoto(True, *self._icons)
+        self._header_icon = ImageTk.PhotoImage(render_icon(self._px(34)), master=self.root)
+        self._bar_icon = ImageTk.PhotoImage(render_icon(self._px(20)), master=self.root)
 
     def _setting(self, widget: tk.Widget, state: str = "normal") -> tk.Widget:
         if isinstance(widget, ttk.Entry):
@@ -171,52 +147,83 @@ class StepWatchApp:
         self._settings_widgets.append((widget, state))
         return widget
 
+    def _section(self, parent: tk.Widget, row: int, title: str, *, pady=(0, 10)) -> ttk.Frame:
+        """Carte blanche avec un titre de section discret, comme un groupe de réglages."""
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 12, 16, 14))
+        card.grid(row=row, column=0, sticky="ew", pady=pady)
+        card.columnconfigure(0, weight=1)
+        ttk.Label(card, text=title.upper(), style="Section.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        body = ttk.Frame(card, style="Card.TFrame")
+        body.grid(row=1, column=0, columnspan=4, sticky="ew")
+        body.columnconfigure(0, weight=1)
+        return body
+
     def _build(self) -> None:
-        outer = ttk.Frame(self.root, padding=16)
+        p = PALETTE
+        outer = ttk.Frame(self.root)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(2, weight=1)
 
-        heading = ttk.Frame(outer, style="Header.TFrame", padding=(16, 10))
-        heading.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Label(heading, text="StepWatch", style="Title.TLabel").pack(side="left", padx=(0, 14))
-        ttk.Label(heading, textvariable=self.state_text, style="Status.TLabel").pack(side="left")
+        # En-tête : identité, état de l’enregistrement, actions de session.
+        heading = ttk.Frame(outer, style="Header.TFrame", padding=(20, 12))
+        heading.grid(row=0, column=0, sticky="ew")
+        ttk.Label(heading, image=self._header_icon, style="Card.TLabel").pack(side="left", padx=(0, 10))
+        ttk.Label(heading, text="StepWatch", style="Title.TLabel").pack(side="left", padx=(0, 16))
+        self._status = tk.Frame(heading, bg=p["bg"], padx=10, pady=3)
+        self._status.pack(side="left")
+        self._status_dot = tk.Canvas(self._status, width=self._px(10), height=self._px(10),
+                                     highlightthickness=0, bg=p["bg"])
+        self._status_dot.pack(side="left", padx=(0, 6))
+        self._status_dot_id = self._status_dot.create_oval(1, 1, self._px(10) - 1, self._px(10) - 1, outline="")
+        self._status_label = tk.Label(self._status, textvariable=self.state_text, bg=p["bg"],
+                                      font=(self._ui_font, 9, "bold"))
+        self._status_label.pack(side="left")
         self.import_button = ttk.Button(heading, text="Importer ShareX", command=self._import)
         self.import_button.pack(side="right", padx=(8, 0))
+        self.open_session_button = ttk.Button(heading, text="Ouvrir un guide", command=self._choose_session)
+        self.open_session_button.pack(side="right")
+        ttk.Frame(outer, style="Rule.TFrame", height=1).grid(row=1, column=0, sticky="new")
 
-        toolbar = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
-        toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        content = ttk.Frame(outer, padding=(16, 14, 16, 10))
+        content.grid(row=2, column=0, sticky="nsew")
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(1, weight=1)
+
+        # Barre d’enregistrement : l’action principale reste toujours visible.
+        toolbar = ttk.Frame(content, style="Card.TFrame", padding=(12, 10))
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         actions = ttk.Frame(toolbar, style="Card.TFrame")
         actions.pack(side="left")
-        self.start_button = ttk.Button(actions, text="Démarrer", style="Accent.TButton", command=self._start)
+        self.start_button = ttk.Button(actions, text="●  Enregistrer", style="Record.TButton", command=self._start)
         self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
         self.resume_button = ttk.Button(actions, text="Reprendre", command=self._resume, state="disabled")
-        self.stop_button = ttk.Button(actions, text="Arrêter", command=self._stop, state="disabled")
-        self.note_button = ttk.Button(actions, text="Ajouter une note", command=self._add_note, state="disabled")
+        self.stop_button = ttk.Button(actions, text="■  Arrêter", command=self._stop, state="disabled")
+        self.note_button = ttk.Button(actions, text="+  Note", command=self._add_note, state="disabled")
         for button in (self.start_button, self.pause_button, self.resume_button, self.stop_button, self.note_button):
-            button.pack(side="left", padx=(0, 6))
+            button.pack(side="left", padx=(0, 8))
         counts = ttk.Frame(toolbar, style="Card.TFrame")
-        counts.pack(side="right", padx=(8, 0))
-        for col, (label, variable) in enumerate((("Conservées", self.kept), ("Ignorées", self.ignored))):
-            ttk.Label(counts, textvariable=variable, style="Count.TLabel").grid(row=0, column=2 * col, padx=(6, 4))
-            ttk.Label(counts, text=label, style="CardMuted.TLabel").grid(row=0, column=2 * col + 1, padx=(0, 8))
+        counts.pack(side="right", padx=(8, 4))
+        for col, (label, variable) in enumerate((("étapes", self.kept), ("ignorées", self.ignored))):
+            ttk.Label(counts, textvariable=variable, style="Count.TLabel").grid(row=0, column=2 * col, padx=(14, 4))
+            ttk.Label(counts, text=label, style="CardMuted.TLabel").grid(row=0, column=2 * col + 1)
 
-        self._tabs = ttk.Notebook(outer)
-        self._tabs.grid(row=2, column=0, sticky="nsew")
+        self._tabs = ttk.Notebook(content)
+        self._tabs.grid(row=1, column=0, sticky="nsew")
         body = ttk.Frame(self._tabs, padding=(0, 12, 0, 0))
-        self._tabs.add(body, text="Capture")
+        self._tabs.add(body, text="Enregistrer")
         body.columnconfigure(0, weight=0, minsize=self._px(420))
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
 
         settings = ttk.Frame(body)
-        settings.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
+        settings.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         settings.rowconfigure(0, weight=1)
         settings.columnconfigure(0, weight=1)
-        settings_canvas = tk.Canvas(settings, bg="#eef4f5", highlightthickness=0, width=self._px(420))
+        settings_canvas = tk.Canvas(settings, bg=p["bg"], highlightthickness=0, width=self._px(420))
         settings_canvas.grid(row=0, column=0, sticky="nsew")
         settings_scrollbar = ttk.Scrollbar(settings, orient="vertical", command=settings_canvas.yview)
-        settings_scrollbar.grid(row=0, column=1, sticky="ns")
+        settings_scrollbar.grid(row=0, column=1, sticky="ns", padx=(4, 0))
         settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
         left = ttk.Frame(settings_canvas)
         settings_window = settings_canvas.create_window((0, 0), window=left, anchor="nw")
@@ -224,82 +231,96 @@ class StepWatchApp:
         settings_canvas.bind("<Configure>", lambda event: settings_canvas.itemconfigure(settings_window, width=event.width))
         left.columnconfigure(0, weight=1)
 
-        intervention = ttk.LabelFrame(left, text="Intervention")
-        intervention.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        intervention.columnconfigure(0, weight=1)
-        ttk.Label(intervention, text="Nom de l’intervention").grid(row=0, column=0, sticky="w")
-        self._setting(ttk.Entry(intervention, textvariable=self.name)).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 8))
-        ttk.Label(intervention, text="Dossier des rapports").grid(row=2, column=0, sticky="w")
+        intervention = self._section(left, 0, "Intervention")
+        ttk.Label(intervention, text="Nom du guide", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        self._setting(ttk.Entry(intervention, textvariable=self.name)).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10))
+        ttk.Label(intervention, text="Dossier des guides", style="Card.TLabel").grid(row=2, column=0, sticky="w")
         self._setting(ttk.Entry(intervention, textvariable=self.output)).grid(row=3, column=0, sticky="ew", pady=(4, 0))
-        self._setting(ttk.Button(intervention, text="...", width=3, command=self._choose_output)).grid(row=3, column=1, padx=(6, 0), pady=(4, 0))
+        self._setting(ttk.Button(intervention, text="Parcourir…", command=self._choose_output)).grid(row=3, column=1, padx=(8, 0), pady=(4, 0))
 
-        selection = ttk.LabelFrame(left, text="Zone de capture")
-        selection.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        selection.columnconfigure(0, weight=1)
+        selection = self._section(left, 1, "Que capturer ?")
         if self._uses_portal:
             ttk.Label(selection, text="Le portail Wayland vous propose de choisir un écran ou une fenêtre au démarrage.",
-                      style="Muted.TLabel", wraplength=self._px(380)).grid(sticky="w")
+                      style="CardMuted.TLabel", wraplength=self._px(370)).grid(sticky="w")
         else:
             self._build_target_choices(selection)
 
-        capture = ttk.LabelFrame(left, text="Déclenchement")
-        capture.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        capture.columnconfigure(0, weight=1)
-        fields = [("Intervalle (s)", self.interval)]
+        capture = self._section(left, 2, "Déclenchement")
         if self._uses_portal:
-            ttk.Label(capture, text=self.VISUAL_MODE).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+            ttk.Label(capture, text=self.VISUAL_MODE, style="Card.TLabel").grid(row=0, column=0, sticky="w")
         else:
-            self._setting(ttk.Combobox(capture, textvariable=self.mode, values=tuple(self.MODES), state="readonly"), "readonly").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+            self._setting(ttk.Combobox(capture, textvariable=self.mode, values=tuple(self.MODES), state="readonly"), "readonly").grid(row=0, column=0, sticky="ew")
+        ttk.Label(capture, text="Les clics et les changements visibles deviennent des étapes. Aucune frappe clavier n’est enregistrée.",
+                  style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self._setting(ttk.Checkbutton(capture, text="Barre flottante pendant l’enregistrement",
+                                      variable=self.compact)).grid(row=2, column=0, sticky="w", pady=(10, 0))
+
+        # Réglages avancés repliés par défaut : la plupart des interventions s’en passent.
+        self._advanced_open = tk.BooleanVar(value=False)
+        self.advanced_button = ttk.Button(left, text="▸  Réglages avancés", style="Link.TButton", command=self._toggle_advanced)
+        self.advanced_button.grid(row=3, column=0, sticky="w", padx=(4, 0), pady=(0, 6))
+        self._advanced = ttk.Frame(left)
+        self._advanced.grid(row=4, column=0, sticky="ew")
+        self._advanced.columnconfigure(0, weight=1)
+        timing = self._section(self._advanced, 0, "Détection")
+        fields = [("Intervalle (s)", self.interval)]
+        if not self._uses_portal:
             fields.append(("Délai clic (s)", self.delay))
         fields.append(("Seuil (%)", self.sensitivity))
         for col, (title, variable) in enumerate(fields):
-            ttk.Label(capture, text=title).grid(row=1, column=col, sticky="w", padx=(0, 8))
-            self._setting(ttk.Entry(capture, textvariable=variable, width=9)).grid(row=2, column=col, sticky="ew", padx=(0, 8 if col < len(fields) - 1 else 0))
-            capture.columnconfigure(col, weight=1)
-        self._setting(ttk.Checkbutton(capture, text="Mode conservateur · détecter les petits changements", variable=self.conservative)).grid(row=3, column=0, columnspan=3, sticky="w", pady=(9, 0))
-        ttk.Label(capture, text="Un seuil plus bas conserve davantage de changements visuels.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=4, column=0, columnspan=3, sticky="w", pady=(5, 0))
-
-        masks = ttk.LabelFrame(left, text="Masquage des informations sensibles")
-        masks.grid(row=3, column=0, sticky="ew")
-        masks.columnconfigure(0, weight=1)
-        ttk.Label(masks, text="Une zone par ligne : x, y, largeur, hauteur\nOrigine : coin supérieur gauche de la capture.", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
-        self.masks_text = tk.Text(masks, height=3, width=35, font=(self._mono_font, 10), relief="solid", bd=1, highlightthickness=0)
-        self.masks_text.grid(row=1, column=0, sticky="ew", pady=(7, 0))
+            ttk.Label(timing, text=title, style="Card.TLabel").grid(row=0, column=col, sticky="w", padx=(0, 8))
+            self._setting(ttk.Entry(timing, textvariable=variable, width=9)).grid(row=1, column=col, sticky="ew", padx=(0, 8 if col < len(fields) - 1 else 0), pady=(4, 0))
+            timing.columnconfigure(col, weight=1)
+        self._setting(ttk.Checkbutton(timing, text="Mode conservateur · détecter les petits changements", variable=self.conservative)).grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Label(timing, text="Un seuil plus bas conserve davantage de changements visuels.", style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        masks = self._section(self._advanced, 1, "Masquage des informations sensibles")
+        ttk.Label(masks, text="Une zone par ligne : x, y, largeur, hauteur, depuis le coin supérieur gauche de la capture. "
+                  "Après l’enregistrement, l’éditeur du guide permet aussi de masquer une zone à la souris.",
+                  style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=0, column=0, sticky="w")
+        self.masks_text = tk.Text(masks, height=3, width=35, font=(self._mono_font, 10), relief="flat", bd=0,
+                                  highlightthickness=1, highlightbackground=p["border_strong"],
+                                  highlightcolor=p["accent"], background=p["surface"], foreground=p["text"],
+                                  padx=6, pady=4)
+        self.masks_text.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         self._setting(self.masks_text)
+        self._advanced.grid_remove()
 
         right = ttk.Frame(body)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
-        preview = ttk.Frame(right, style="Card.TFrame", padding=14)
+        preview = ttk.Frame(right, style="Card.TFrame", padding=16)
         preview.grid(row=0, column=0, sticky="nsew")
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(1, weight=1)
         ttk.Label(preview, text="Dernière capture", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
         # The image must not determine the label's requested size.
-        empty_preview = ("L’aperçu apparaîtra après la première capture." if self._backend is not None
-                         else "Importez un dossier ShareX pour le consulter dans Étapes.")
-        self.preview = tk.Label(preview, text=empty_preview,
-                                bg="#132432", fg="#d9e9ee", font=(self._ui_font, 10), width=1, height=1)
+        empty_preview = ("L’aperçu apparaîtra après la première étape.\nPendant l’enregistrement, StepWatch se réduit en une petite barre flottante."
+                         if self._backend is not None
+                         else "Importez un dossier ShareX ou ouvrez un guide pour le modifier dans l’onglet Guide.")
+        self.preview = tk.Label(preview, text=empty_preview, justify="center",
+                                bg=p["preview"], fg=p["preview_text"], font=(self._ui_font, 10), width=1, height=1)
         self.preview.grid(row=1, column=0, sticky="nsew")
         self.preview.bind("<Configure>", self._draw_preview)
         self.preview.bind("<Map>", self._draw_preview)
 
         self._review = SessionReview(self._tabs, choose_session=self._choose_session,
-                                     on_loaded=self._use_session, on_error=self._review_error, font=self._ui_font)
-        self._tabs.add(self._review, text="Étapes")
+                                     on_loaded=self._use_session, on_error=self._review_error, font=self._ui_font,
+                                     on_changed=self._guide_changed, export=self._export_from_guide)
+        self._tabs.add(self._review, text="Guide")
         self._tabs.bind("<<NotebookTabChanged>>", self._tab_changed)
 
         log_frame = ttk.Frame(self._tabs, padding=(0, 12, 0, 0))
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
         self.log = scrolledtext.ScrolledText(log_frame, height=5, state="disabled", wrap="word",
-                                             font=(self._mono_font, 9), relief="flat", bg="#ffffff", fg="#253b54")
+                                             font=(self._mono_font, 9), relief="flat", bg=p["surface"], fg="#344054",
+                                             padx=12, pady=10, highlightthickness=0)
         self.log.grid(row=0, column=0, sticky="nsew")
         self._tabs.add(log_frame, text="Journal")
 
-        session = ttk.Frame(outer, style="Card.TFrame", padding=(10, 6))
-        session.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        session = ttk.Frame(content, style="Card.TFrame", padding=(12, 8))
+        session.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         session.columnconfigure(0, weight=1)
         location = ttk.Label(session, textvariable=self.session_text, style="CardMuted.TLabel", width=1)
         location.grid(row=0, column=0, sticky="ew", padx=(4, 6))
@@ -313,8 +334,22 @@ class StepWatchApp:
         if self._uses_portal:
             footer = "La source est partagée avec votre accord. Les masques sont appliqués avant l’enregistrement."
         elif self._backend is None:
-            footer = "Import ShareX, relecture et rapports disponibles. La capture nécessite Windows, X11 ou Wayland."
-        ttk.Label(outer, text=footer, style="Muted.TLabel", wraplength=self._px(840)).grid(row=4, column=0, sticky="w", pady=(8, 0))
+            footer = "Import ShareX, guides et rapports disponibles. La capture nécessite Windows, X11 ou Wayland."
+        ttk.Label(content, text=footer, style="Muted.TLabel", wraplength=self._px(840)).grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self._set_status_colours("idle")
+
+    def _toggle_advanced(self) -> None:
+        opened = not self._advanced_open.get()
+        self._advanced_open.set(opened)
+        self._advanced.grid() if opened else self._advanced.grid_remove()
+        self.advanced_button.configure(text=("▾" if opened else "▸") + "  Réglages avancés")
+
+    def _set_status_colours(self, state: str) -> None:
+        dot, background, text = STATUS_COLOURS.get(state, STATUS_COLOURS["idle"])
+        for widget in (self._status, self._status_dot, self._status_label):
+            widget.configure(bg=background)
+        self._status_label.configure(fg=text)
+        self._status_dot.itemconfigure(self._status_dot_id, fill=dot)
 
     def _build_target_choices(self, selection: ttk.LabelFrame) -> None:
         choice = self._setting(ttk.Combobox(selection, textvariable=self.source, values=self.SOURCES, state="readonly"), "readonly")
@@ -325,13 +360,13 @@ class StepWatchApp:
         self.target_combo = self._setting(ttk.Combobox(selection, textvariable=self.target, state="readonly"), "readonly")
         self.target_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
-        self.region_frame = ttk.Frame(selection)
+        self.region_frame = ttk.Frame(selection, style="Card.TFrame")
         self.region_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         for index, label in enumerate(("X", "Y", "Largeur", "Hauteur")):
             self.region_frame.columnconfigure(index, weight=1)
-            ttk.Label(self.region_frame, text=label).grid(row=0, column=index, sticky="w")
+            ttk.Label(self.region_frame, text=label, style="Card.TLabel").grid(row=0, column=index, sticky="w")
             self._setting(ttk.Entry(self.region_frame, textvariable=self.region_values[index], width=8)).grid(row=1, column=index, sticky="ew", padx=(0, 5 if index < 3 else 0))
-        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="Muted.TLabel", wraplength=self._px(380)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
 
     def _write_log(self, message: str, level: int | None = logging.INFO) -> None:
         """Ajoute une ligne au journal de l’interface et, si level, au journal de diagnostic."""
@@ -411,6 +446,22 @@ class StepWatchApp:
     def _use_session(self, directory: Path) -> None:
         self._session_dir = directory
         self.session_text.set(str(directory))
+
+    def _guide_changed(self, message: str) -> None:
+        self._write_log(message)
+
+    def _export_from_guide(self, kind: str) -> None:
+        if kind == "standalone":
+            self._export_standalone()
+        elif kind == "folder":
+            self._open_session()
+        elif kind == "markdown" and self._session_dir is not None:
+            try:
+                path = export_markdown(self._session_dir)
+            except Exception as exc:
+                self._review_error(str(exc))
+            else:
+                self._write_log(f"Rapport Markdown : {path} (liens vers captures/).")
 
     def _review_error(self, message: str) -> None:
         self._write_log(f"Relecture impossible : {message}", level=logging.WARNING)
@@ -525,6 +576,8 @@ class StepWatchApp:
             self._preview_key = None
             self.preview.configure(image="", text="En attente de la première capture…")
             recorder.start()
+            self._compact_session = self.compact.get()
+            self._regions_key = None
             self._write_log(f"Intervention : {self.name.get().strip()} — {target.label}")
             self._write_log(f"Rapport local : {store.directory}")
         except Exception as exc:
@@ -565,7 +618,7 @@ class StepWatchApp:
         text = simpledialog.askstring(
             "Ajouter une note",
             "Note pour la dernière étape (aucune frappe n’est enregistrée hors de ce champ) :",
-            parent=self.root,
+            parent=self._bar if self._bar is not None and self._withdrawn else self.root,
         )
         if not text or not text.strip():
             return
@@ -597,6 +650,11 @@ class StepWatchApp:
         self.note_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
         self.import_button.configure(state="disabled" if active or busy else "normal")
         self._review.open_button.configure(state="disabled" if active or busy else "normal")
+        self.open_session_button.configure(state="disabled" if active or busy else "normal")
+        other_work = self._closing or any(thread is not None and thread.is_alive()
+                                          for thread in (self._import_thread, self._export_thread))
+        self._review.set_editable(not active and not other_work)
+        self._set_status_colours("stopping" if self._closing else state)
         self.open_button.configure(state="normal" if self._session_dir is not None else "disabled")
         exportable = self._session_dir is not None and not active and not busy
         self.export_button.configure(state="normal" if exportable else "disabled")
@@ -703,6 +761,7 @@ class StepWatchApp:
             self._drain(self._background_events, 30, self._handle_background_event)
             self._review.poll()
             self._update_controls()
+            self._sync_floating_bar()
         except Exception as exc:
             self._report_ui_error(exc)
         finally:
@@ -711,6 +770,87 @@ class StepWatchApp:
             if not self._disposed:
                 delay = 100 if self._closing or self._active() or self._background_running() else 300
                 self._poll_id = self.root.after(delay, self._poll)
+
+    # ----- Barre flottante pendant l’enregistrement ------------------------------
+
+    def _sync_floating_bar(self) -> None:
+        recorder = self._recorder
+        state = recorder.state if recorder is not None else "idle"
+        if state in {"recording", "paused"} and self._compact_session and self._bar is None and not self._closing:
+            self._bar = FloatingBar(self.root, font=self._ui_font, icon=self._bar_icon,
+                                    on_pause=self._pause, on_resume=self._resume, on_note=self._add_note,
+                                    on_stop=self._stop, on_expand=self._expand_from_bar, scale=self._scale)
+            self._bar.show()
+            self._bar.update_idletasks()
+            self._bar_excluded = exclude_from_capture(self._window_handle(self._bar))
+            self.root.withdraw()
+            self._withdrawn = True
+            self._regions_key = None
+        if self._bar is not None:
+            if state in self.ACTIVE_STATES and not self._closing:
+                self._bar.update_state(state, self.kept.get())
+            else:
+                self._hide_floating_bar()
+        if recorder is not None and state in self.ACTIVE_STATES:
+            self._send_regions(recorder)
+
+    def _hide_floating_bar(self) -> None:
+        if self._bar is not None:
+            try:
+                self._bar.destroy()
+            except tk.TclError:
+                pass
+            self._bar = None
+        self._compact_session = False
+        if self._withdrawn:
+            self._withdrawn = False
+            self.root.deiconify()
+            self.root.lift()
+
+    def _expand_from_bar(self) -> None:
+        """Rouvre la fenêtre principale ; la barre reste disponible."""
+        if self._withdrawn:
+            self._withdrawn = False
+            self.root.deiconify()
+            self.root.lift()
+
+    @staticmethod
+    def _window_handle(window: tk.Misc) -> int:
+        if sys.platform != "win32":
+            return 0
+        try:
+            return int(window.wm_frame(), 16)
+        except (tk.TclError, ValueError):
+            return 0
+
+    def _own_regions(self) -> tuple[list[Rect], list[Rect]]:
+        """Rectangles écran de StepWatch : clics ignorés, et parties à masquer."""
+        regions, masked = [], []
+        windows = []
+        if self._bar is not None and self._bar.winfo_ismapped():
+            windows.append((self._bar, 0, 0, not self._bar_excluded))
+        if not self._withdrawn and self.root.winfo_ismapped():
+            # Marge pour la barre de titre et les bordures du gestionnaire de fenêtres.
+            windows.append((self.root, self._px(8), self._px(40), True))
+        for window, side, top, mask in windows:
+            width, height = window.winfo_width(), window.winfo_height()
+            if width <= 1 or height <= 1:
+                continue
+            rect = Rect(window.winfo_rootx() - side, window.winfo_rooty() - top, width + 2 * side, height + top + side)
+            regions.append(rect)
+            if mask and not self._uses_portal:
+                masked.append(rect)
+        return regions, masked
+
+    def _send_regions(self, recorder: Recorder) -> None:
+        setter = getattr(recorder, "set_excluded_regions", None)
+        if setter is None:
+            return
+        regions, masked = self._own_regions()
+        key = tuple(regions), tuple(masked)
+        if key != self._regions_key:
+            self._regions_key = key
+            setter(regions, masked)
 
     def _import(self) -> None:
         if self._active() or self._closing or self._background_running():
@@ -828,6 +968,13 @@ class StepWatchApp:
             return
         if threading.get_ident() != getattr(self, "_ui_thread", threading.get_ident()):
             raise RuntimeError("Les ressources Tk doivent être libérées sur le thread de l’interface.")
+        bar = getattr(self, "_bar", None)
+        if bar is not None:
+            try:
+                bar.destroy()
+            except tk.TclError:
+                pass
+            self._bar = None
         review = getattr(self, "_review", None)
         if review is not None and not review.shutdown():
             raise RuntimeError("La lecture de la capture est encore active.")

@@ -4,6 +4,18 @@
 
 Rien pour l'instant.
 
+## 0.7.0 — 2026-11-19
+
+Nouvelle interface et éditeur de guide, inspirés d'OpenSteps pour l'usage : StepWatch se fait discret pendant l'enregistrement, et l'intervention se met en forme avant d'être partagée.
+
+- **Interface** : thème clair (surfaces blanches, accent bleu), en-tête avec icône et pastille d'état colorée, bouton **● Enregistrer**, onglets **Enregistrer**, **Guide** et **Journal**. Les réglages de détection et les masques sont regroupés dans **Réglages avancés**, replié par défaut.
+- **Barre flottante** pendant l'enregistrement : la fenêtre principale se retire au profit d'une petite barre (état, nombre d'étapes, Pause/Reprendre, Note, Arrêter, retour à la fenêtre), déplaçable. Les clics sur la barre ou sur la fenêtre principale ne deviennent jamais des étapes. Sous Windows 10 2004+ et 11, la barre est exclue des captures (`SetWindowDisplayAffinity`) ; ailleurs, les parties de StepWatch qui recouvrent la cible sont noircies dans les captures. Option pour garder la fenêtre principale.
+- **Éditeur de guide** (onglet **Guide**) : titre du guide, titre et description de chaque étape, ordre (↑ ↓), suppression et **Masquer une zone…** à la souris. Chaque modification réécrit `steps.json`, `rapport.html` et `rapport.md`. La capture d'une étape supprimée est déplacée dans `captures/retirees/`. Un rapport autonome devenu obsolète est supprimé, pour ne jamais partager une version qui contient une zone non masquée ou une étape retirée. **Exporter le guide** regroupe le rapport autonome, le Markdown et l'ouverture du dossier.
+- **Rapports** : un titre d'étape saisi remplace le type d'étape dans les titres HTML et Markdown ; le type reste affiché comme une pastille. `steps.json` gagne un champ facultatif `title` (format 1 inchangé, compatible avec les versions précédentes).
+- Icône de fenêtre et de dock dessinée comme `packaging/linux/stepwatch.svg`.
+
+Testé sous Linux (Xvfb, Python 3.12) : suite complète, nouveaux tests de l'éditeur, de la barre flottante et de l'exclusion des clics, et un enregistrement X11 réel d'un moniteur entier où la barre est noircie dans la capture. Sous Windows, les tests d'interface de la CI appellent `SetWindowDisplayAffinity` sur la barre ; son effet sur les captures reste à vérifier sur un poste réel (liste de validation).
+
 ## 0.6.0 — 2026-11-18
 
 StepWatch enregistre désormais les interventions sous Linux, en plus de Windows. Les captures et les rapports restent sur le poste du technicien.

@@ -349,3 +349,26 @@ class WindowsBackend:
             self._capture.close()
             self._capture = None
             self._owner = None
+
+
+#: SetWindowDisplayAffinity value removing a window from screen capture
+#: (Windows 10 version 2004 and later; earlier versions show a black box).
+WDA_EXCLUDEFROMCAPTURE = 0x11
+
+
+def exclude_from_capture(hwnd: int, platform: str | None = None) -> bool:
+    """Hide one of StepWatch's own windows from screen captures, if possible.
+
+    Only Windows offers this (SetWindowDisplayAffinity). Elsewhere, and on
+    failure, return False: the caller then masks the window in captures.
+    """
+    platform = sys.platform if platform is None else platform
+    if platform != "win32" or not hwnd:
+        return False
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
+        return bool(user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE))
+    except (AttributeError, OSError):
+        return False

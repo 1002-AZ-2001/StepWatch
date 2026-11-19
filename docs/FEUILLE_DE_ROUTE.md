@@ -2,6 +2,16 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 0.7 — interface et éditeur de guide
+
+Nouvelle interface (thème clair, barre d'enregistrement, réglages avancés repliés), barre flottante pendant l'enregistrement, et onglet **Guide** pour modifier une intervention avant de la partager. Inspiré d'OpenSteps pour l'usage. [Validation](validation.md)
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Barre flottante | Pause, note, arrêt depuis une petite barre ; ses clics et ceux de la fenêtre principale ne deviennent jamais des étapes. | Exclue des captures sous Windows 10 2004+ et 11 seulement ; noircie ailleurs quand elle recouvre la cible ; non masquable sous Wayland. |
+| Éditeur de guide | Titre du guide, titres et descriptions des étapes, ordre, suppression (capture déplacée dans `captures/retirees/`). | Une seule session ouverte à la fois ; pas d'annulation après enregistrement. |
+| Masquage a posteriori | Noircir des zones à la souris avant partage ; le rapport autonome obsolète est supprimé. | Définitif : les pixels d'origine ne sont pas conservés. |
+
 ## Version 0.6 — enregistrement sous Linux
 
 StepWatch capture les clics et les changements visuels sous X11. Sous Wayland, le partage passe par le portail du bureau et PipeWire pour suivre les changements visuels. Cette version réduit aussi les copies d'images et la mémoire utilisée par l'import ShareX. [Validation et mesures](validation.md)
@@ -44,8 +54,8 @@ Un rapport est fait pour être transmis. Ce chantier traite le risque principal 
 
 | Chantier | Valeur | Effort | Risque et limite |
 | --- | --- | --- | --- |
-| Éditeur de session après l'arrêt | Supprimer une étape inutile, corriger ou compléter une annotation, ajouter une note à n'importe quelle étape. Rapports régénérés. | Moyen : nouvelle fenêtre Tk, réécriture de `steps.json`. | Une étape supprimée doit-elle garder son PNG d'origine ? À décider ; proposition : déplacement dans `captures/retirees/`, exclu des rapports. |
-| Masquage a posteriori | Noircir à la souris une zone oubliée sur une capture déjà enregistrée, avant partage. | Moyen : dessin sur l'image dans l'éditeur. | Écrase définitivement les pixels du PNG ; le rapport autonome existant doit être régénéré. |
+| Annotations sur les captures | Flèches, rectangles et numéros sur une capture, comme dans OpenSteps, sans écraser l'original. | Moyen. | Copie de l'image à gérer dans les rapports. |
+| Remplacer une capture | Importer ou coller une autre image quand la capture est mauvaise. | Faible. | Vérifier le masquage de l'image importée. |
 | Masques dessinés avant l'enregistrement | Dessiner les zones sur un aperçu de la cible au lieu de saisir `x,y,largeur,hauteur`. | Moyen. | L'aperçu nécessite l'accès à la cible avant l'enregistrement. |
 
 ## À venir — capture plus fiable

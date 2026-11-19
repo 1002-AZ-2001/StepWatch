@@ -53,7 +53,7 @@ STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 't
 
 À faire avant une diffusion opérationnelle, sur un poste distinct de celui de compilation :
 
-1. Lancez l'application et vérifiez qu'aucune capture ne commence avant **Démarrer**.
+1. Lancez l'application et vérifiez qu'aucune capture ne commence avant **● Enregistrer**.
 2. Enregistrez une fenêtre Bloc-notes : clics gauche et droit, double-clic, déplacement, redimensionnement, pause et reprise. Contrôlez les marqueurs, les compteurs et l'ordre des étapes.
 3. Pendant un enregistrement, ajoutez une note, puis vérifiez sa présence dans `rapport.html` et `rapport.md`.
 4. Réduisez puis fermez la cible : les erreurs doivent être visibles, sans plantage ni perte silencieuse de capture.
@@ -63,14 +63,17 @@ STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 't
 8. Arrêtez puis relancez une session, et fermez l'application pendant un enregistrement. Vérifiez le rapport, la libération des hooks et l'absence de capture après l'arrêt.
 9. Importez des images ShareX, ouvrez le rapport hors ligne et comparez les sources avant et après.
 10. Cliquez dans une fenêtre lancée en administrateur pendant l'enregistrement et consultez le journal pour détecter une éventuelle réinstallation du hook.
+11. Enregistrez un moniteur entier avec la barre flottante. Cliquez sur ses boutons : aucune étape ne doit apparaître. Sous Windows 10 2004+ et 11, la barre ne doit pas figurer dans les PNG (`SetWindowDisplayAffinity`). Déplacez-la au-dessus de la cible et vérifiez de nouveau.
+12. Dans l'onglet **Guide**, modifiez un titre, une description, l'ordre, supprimez une étape et masquez une zone. Vérifiez `rapport.html`, `rapport.md`, `captures/retirees/` et la suppression d'un rapport autonome existant.
 
 ## Validation sur un bureau Linux
 
 1. En session X11, capturez une fenêtre de test en mode **Hybride**. Déplacez et redimensionnez la fenêtre. Testez un clic dans la cible et un clic dans une autre fenêtre qui la recouvre, puis vérifiez les étapes et leurs marqueurs.
 2. En session X11 avec plusieurs moniteurs, vérifiez la capture de chaque moniteur et d'une zone personnalisée. Contrôlez les pixels de la zone capturée et la position des masques dans le PNG.
 3. En session Wayland, ouvrez StepWatch depuis le menu, lancez un enregistrement et annulez le partage dans le portail. Vérifiez le retour de l'interface à un état permettant de démarrer une nouvelle session.
-4. Autorisez une capture depuis **Démarrer**, puis modifiez la source partagée. Vérifiez les changements enregistrés et les masques dans les PNG. Testez la pause et la reprise.
+4. Autorisez une capture depuis **● Enregistrer**, puis modifiez la source partagée. Vérifiez les changements enregistrés et les masques dans les PNG. Testez la pause et la reprise.
 5. Arrêtez le partage depuis le bureau et vérifiez l'état de StepWatch et la disponibilité du rapport. Recommencez en utilisant **Arrêter** dans StepWatch.
+6. Sous X11, enregistrez un moniteur entier avec la barre flottante au-dessus : elle doit être noircie dans les PNG, et ses clics ignorés. Sous Wayland, vérifiez qu'elle reste hors de la zone partagée.
 
 Un portail de test sur D-Bus a transmis à StepWatch un flux PipeWire animé de 162 × 94 à 120 images par seconde. Sur Debian 13, le backend a reçu 70 images distinctes sur 70 demandes, y compris après deux pauses de lecture de 1,25 s. Le test reproduisait l'épuisement des 16 buffers du producteur avant le correctif de recyclage. Une variante à deux couleurs a vérifié le contenu des pixels et la révocation par le portail.
 

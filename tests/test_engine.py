@@ -1003,3 +1003,47 @@ class NoteTests(unittest.TestCase):
         self.assertTrue(self.recorder.stop())
         with self.assertRaises(RuntimeError):
             self.recorder.add_note("trop tard")
+
+
+class ExcludedRegionTests(unittest.TestCase):
+    make_recorder = RecorderTests.make_recorder
+    shutdown = RecorderTests.shutdown
+    wait_for = RecorderTests.wait_for
+    drain_events = RecorderTests.drain_events
+    start = RecorderTests.start
+    saved_events = RecorderTests.saved_events
+
+    def setUp(self):
+        RecorderTests.setUp(self)
+
+    def test_clicks_on_stepwatch_windows_never_become_steps(self):
+        self.make_recorder(mode="clicks", click_delay=0)
+        listener = self.start()
+        self.recorder.set_excluded_regions([Rect(-15, 15, 10, 10)])
+        listener.click(-10, 20)  # Inside the target, but on the floating bar.
+        time.sleep(.15)
+        self.assertEqual(self.saved_events(), [])
+        listener.click(30, 40)
+        self.wait_for(lambda: len(self.saved_events()) == 1)
+        self.assertTrue(self.recorder.stop())
+
+    def test_masked_regions_are_converted_to_target_coordinates(self):
+        self.make_recorder()
+        target = Rect(100, 50, 400, 300)
+        self.recorder.set_excluded_regions([Rect(0, 0, 10, 10)], [Rect(450, 300, 200, 100), Rect(0, 0, 10, 10)])
+        self.assertEqual(self.recorder._excluded_masks(target), (Rect(350, 250, 50, 50),))
+        self.recorder.set_excluded_regions([Rect(450, 300, 200, 100)])
+        self.assertEqual(self.recorder._excluded_masks(target), ())  # Clicks only, no mask.
+
+    def test_masked_regions_are_black_in_captures(self):
+        self.backend.image = Image.new("RGB", (80, 60), "white")
+        self.make_recorder(mode="visual", interval=.1)
+        rect = self.backend.rectangle
+        self.recorder.set_excluded_regions([Rect(rect.left, rect.top, 10, 10)],
+                                           [Rect(rect.left, rect.top, 10, 10)])
+        self.start()
+        self.wait_for(lambda: len(self.saved_events()) >= 1)
+        self.assertTrue(self.recorder.stop())
+        with Image.open(self.store.directory / self.store.steps[0]["image"]) as image:
+            self.assertEqual(image.getpixel((2, 2)), (0, 0, 0))
+            self.assertEqual(image.getpixel((40, 40)), (255, 255, 255))

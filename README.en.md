@@ -4,7 +4,7 @@
 
 StepWatch documents IT support sessions with automatic screenshots, notes and an offline report. It runs on the technician's workstation during local and remote support.
 
-Mask sensitive areas before recording, then use the **Étapes** (Steps) tab to review the session and export a standalone HTML or Markdown report. Screenshots and reports stay on the workstation.
+While recording, StepWatch shrinks into a small floating bar. Afterwards, the **Guide** tab is an editor: step titles and descriptions, order, removal, blacking out a forgotten area, then standalone HTML or Markdown export. Screenshots and reports stay on the workstation.
 
 The application interface and the documentation in `docs/` are in French.
 
@@ -16,7 +16,7 @@ The application interface and the documentation in `docs/` are in French.
 | Linux X11 | Local clicks and visual changes for a visible window, monitor or region. |
 | Linux Wayland | Visual changes from the screen or window shared through the desktop portal. The app window uses XWayland. [Wayland setup in French](docs/distribution.md#wayland) |
 
-![Reviewing a demonstration session recorded on X11](docs/stepwatch.png)
+![Guide editor: guide title, step list, title and description of the selected step](docs/stepwatch.png)
 
 ## Download
 
@@ -71,15 +71,30 @@ python3 -m venv .venv
 
 ## Record a support session
 
-1. Enter a name and choose the reports folder.
+1. In the **Enregistrer** (Record) tab, enter the guide name and choose its folder.
 2. On Windows and X11, select a window, monitor or region. **Actualiser** (Refresh) reloads the list. Coordinates are physical pixels. A monitor on the left can have a negative origin.
 3. Choose **Hybride** (local clicks and visual changes), clicks only, or visual changes only. Wayland sessions use visual changes mode.
-4. Set the comparison interval, threshold and click delay if applicable. A lower threshold keeps more steps. Conservative mode detects small changes.
-5. To hide parts of the image, enter one mask per line as `x,y,width,height` relative to the top-left corner. Click **Démarrer** (Start). On Wayland, choose a source in the desktop picker and allow sharing.
-6. Use **Pause**, **Reprendre** (Resume) and **Arrêter** (Stop). The preview, counters and log show kept screenshots, ignored comparisons and errors.
-7. **Ajouter une note** (Add a note) attaches free text to the latest step, while recording or paused.
-8. After stopping, use **Étapes** (Steps) to review each screenshot, timestamp, and note. **Ouvrir une session** (Open session) reopens an existing folder with `steps.json`.
-9. **Ouvrir le dossier** (Open folder) shows the session files. **Rapport autonome** (Standalone report) produces a single HTML file you can attach to a ticket.
+4. If needed, open **Réglages avancés** (Advanced settings): comparison interval, threshold, click delay, conservative mode, and masks as `x,y,width,height` (one per line, relative to the top-left corner). A lower threshold keeps more steps.
+5. Click **● Enregistrer** (Record). On Wayland, choose a source in the desktop picker and allow sharing.
+6. The main window gives way to a **floating bar** at the bottom of the screen: status, step count, **Pause**/**Reprendre** (Resume), **+ Note**, **■ Arrêter** (Stop), and **⤢** to reopen the window. Drag it to move it. Its clicks never become steps. On Windows 10 (version 2004 and later) and 11, it is excluded from captures; elsewhere, the part over the target is blacked out in captures. Untick **Barre flottante pendant l'enregistrement** to keep the main window.
+7. **+ Note** attaches free text to the latest step, while recording or paused.
+8. After stopping, the window comes back on the **Guide** tab to review and edit the steps (see below). The **Journal** tab shows events and errors.
+
+![Floating bar during a recording](docs/barre-flottante.png)
+
+## Edit the guide
+
+The **Guide** tab opens the session just recorded, or another folder with **Ouvrir un guide** (Open a guide). Every change is saved at once to `steps.json`, `rapport.html` and `rapport.md`.
+
+- **Guide title**: editable at the top of the tab.
+- **Step title**: by default, the step type ("Clic local", "Double-clic local"…). A typed title replaces it in reports; the type stays visible as a chip.
+- **Description**: the step text, notes included.
+- **↑ ↓**: reorder; steps are renumbered.
+- **Supprimer** (Remove): removes the step from reports. Its screenshot moves to `captures/retirees/`, without being destroyed; delete that folder to erase it.
+- **Masquer une zone…** (Black out an area): draw over forgotten data with the mouse. This is permanent: the original pixels are not kept.
+- **Exporter le guide** (Export): standalone report (one HTML file), Markdown, or open the folder.
+
+After a change, an existing standalone report holds the previous version, possibly with the removed step or the unmasked area: StepWatch deletes it and says so in the log. Export it again before sharing.
 
 The recorder groups rapid presses into a single local double-click step. A second press received after the first screenshot can produce another step. For AnyDesk, TeamViewer or RDP, select the local window of the remote support software. Actions by the remote client can produce visual change steps. Markers show local clicks.
 
@@ -97,7 +112,7 @@ Each session has its own folder:
 | `rapport.md` | The same report in Markdown, for a wiki or a ticket, with the same links to `captures/`. |
 | `rapport-autonome.html` | Created by **Rapport autonome**: one file with embedded screenshots (about 33 % larger). |
 
-**Importer ShareX** (Import ShareX) copies the images of a folder into a new session and opens **Étapes**. It sorts the files by modification date and name, and leaves the original images in place. Masks apply to recordings only.
+**Importer ShareX** (Import ShareX) copies the images of a folder into a new session and opens the **Guide** tab. It sorts the files by modification date and name, and leaves the original images in place. Masks apply to recordings only.
 
 Screenshots may contain confidential data. Choose a suitable folder and manage its protection and retention. A synchronised folder (OneDrive, a share backed up to the cloud…) would send the screenshots off the workstation. Masks stay fixed relative to the capture and do not detect passwords: do not display sensitive data outside masked areas.
 
@@ -106,7 +121,7 @@ If an antivirus or a sync tool briefly locks a file, the write is retried. If th
 ## Capture limitations
 
 - On Windows and X11, keep the target window unobstructed. An overlapping window can appear in the capture.
-- When StepWatch is visible on a shared display, updating its preview can trigger another capture.
+- Clicks on StepWatch (floating bar or main window) are ignored. If the main window stays visible over the target, it is blacked out in captures; prefer the floating bar. On Wayland, StepWatch does not know where the shared source is and cannot mask its own window: keep it outside the shared area.
 - A click belongs to the target only if it lands on it or on a dialog it owns.
 - A closed, minimised or hidden window produces an explicit error in the log.
 - On Windows, the UAC secure desktop, protected content and elevated windows can prevent capture or click reception.
@@ -131,7 +146,7 @@ The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/ste
 DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The images in this README show a demonstration session and report with synthetic data.
+The images in this README show a demonstration session and report with synthetic data, on Linux. The floating bar, the guide editor and the split between recording and review are inspired by [OpenSteps](https://github.com/ebanez8/openstep) (MIT licence); no code is reused from it.
 
 Thanks to DokT for the first English translation.
 
