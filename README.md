@@ -4,7 +4,7 @@
 
 StepWatch documente une intervention informatique avec des captures automatiques, des notes et un rapport consultable hors ligne. Il s'installe sur le poste du technicien pour suivre une intervention locale ou une session de télémaintenance.
 
-Masquez les zones sensibles avant l'enregistrement, puis utilisez l'onglet **Étapes** pour relire l'intervention et exporter un rapport HTML autonome ou Markdown. Les captures et les rapports restent sur le poste.
+Pendant l'enregistrement, StepWatch se réduit en une petite barre flottante. Ensuite, l'onglet **Guide** sert d'éditeur : titres et descriptions des étapes, ordre, suppression, masquage d'une zone oubliée, puis export HTML autonome ou Markdown. Les captures et les rapports restent sur le poste.
 
 [Télécharger la dernière version](https://github.com/1002-AZ-2001/StepWatch/releases/latest) · [Enregistrer une intervention](#enregistrer-une-intervention)
 
@@ -14,7 +14,7 @@ Masquez les zones sensibles avant l'enregistrement, puis utilisez l'onglet **Ét
 | Linux X11 | Clics locaux et changements visuels d'une fenêtre visible, d'un moniteur ou d'une zone. |
 | Linux Wayland | Changements visuels de l'écran ou de la fenêtre partagée dans le portail du bureau. L'interface s'affiche via XWayland. [Composants Wayland](docs/distribution.md#wayland) |
 
-![Relecture d'une intervention de démonstration enregistrée sous X11](docs/stepwatch.png)
+![Éditeur de guide : titre du guide, liste des étapes, titre et description de l'étape sélectionnée](docs/stepwatch.png)
 
 ## Télécharger
 
@@ -69,17 +69,34 @@ python3 -m venv .venv
 
 ## Enregistrer une intervention
 
-1. Saisissez un nom et choisissez le dossier des rapports.
+![Onglet Enregistrer : intervention, cible et déclenchement ; réglages avancés repliés](docs/enregistrer.png)
+
+1. Dans l'onglet **Enregistrer**, saisissez le nom du guide et choisissez son dossier.
 2. Sous Windows et X11, sélectionnez une fenêtre, un moniteur ou une zone. **Actualiser** recharge la liste. Les coordonnées sont en pixels physiques et l'origine d'un écran placé à gauche peut être négative.
 3. Choisissez le mode **Hybride** (clics locaux et changements visuels), **Clics uniquement** ou **Changements visuels uniquement**. En session Wayland, le mode changements visuels est sélectionné.
-4. Réglez l'intervalle de comparaison, le seuil et le délai après clic si ce mode est utilisé. Plus le seuil est bas, plus StepWatch garde d'étapes. Le mode conservateur détecte les petits changements.
-5. Si besoin, ajoutez un masque par ligne au format `x,y,largeur,hauteur`, relatif au coin supérieur gauche de la capture. Cliquez sur **Démarrer**. Sous Wayland, choisissez la source dans le sélecteur du bureau et autorisez le partage.
-6. Utilisez **Pause**, **Reprendre** et **Arrêter** dans la barre de capture. Les compteurs affichent les images gardées et ignorées. L'onglet **Journal** affiche les événements et les erreurs.
-7. **Ajouter une note** attache un texte libre à la dernière étape, pendant l'enregistrement ou la pause.
-8. Après l'arrêt, l'onglet **Étapes** affiche la session dans l'ordre des captures. Sélectionnez une ligne pour voir son image, son heure et ses notes. **Ouvrir une session** permet de relire un dossier existant qui contient `steps.json`.
-9. **Ouvrir le dossier** donne accès aux fichiers et **Rapport autonome** produit un HTML à joindre à un ticket.
+4. Si besoin, ouvrez **Réglages avancés** : intervalle de comparaison, seuil, délai après clic, mode conservateur, et masques au format `x,y,largeur,hauteur` (un par ligne, relatif au coin supérieur gauche de la capture). Plus le seuil est bas, plus StepWatch garde d'étapes.
+5. Cliquez sur **● Enregistrer**. Sous Wayland, choisissez la source dans le sélecteur du bureau et autorisez le partage.
+6. La fenêtre principale laisse la place à une **barre flottante** en bas de l'écran : état, nombre d'étapes, **Pause**/**Reprendre**, **+ Note**, **■ Arrêter**, et **⤢** pour rouvrir la fenêtre. Déplacez-la en la faisant glisser. Ses clics ne deviennent jamais des étapes. Sous Windows 10 (version 2004 et ultérieures) et 11, elle est exclue des captures ; ailleurs, la partie qui recouvre la cible est noircie dans les captures. Décochez **Barre flottante pendant l'enregistrement** pour garder la fenêtre principale.
+7. **+ Note** attache un texte libre à la dernière étape, pendant l'enregistrement ou la pause.
+8. Après l'arrêt, la fenêtre revient sur l'onglet **Guide** pour relire et modifier les étapes (voir ci-dessous). L'onglet **Journal** affiche les événements et les erreurs.
+
+![Barre flottante pendant un enregistrement](docs/barre-flottante.png)
 
 Le moteur regroupe les appuis rapprochés en une étape « Double-clic local ». Un second appui reçu après la capture de la première étape peut produire une autre étape. Pour AnyDesk, TeamViewer ou RDP, sélectionnez la fenêtre locale du logiciel de télémaintenance. Une action du client distant peut produire une étape « Changement visuel détecté ». Les marqueurs indiquent les clics locaux.
+
+## Modifier le guide
+
+L'onglet **Guide** ouvre l'intervention qui vient d'être enregistrée, ou un autre dossier avec **Ouvrir un guide**. Chaque modification est enregistrée aussitôt dans `steps.json`, `rapport.html` et `rapport.md`.
+
+- **Titre du guide** : modifiable en haut de l'onglet.
+- **Titre de l'étape** : par défaut, le type d'étape (« Clic local », « Double-clic local »…). Un titre saisi le remplace dans les rapports ; le type reste affiché comme une pastille.
+- **Description** : le texte de l'étape, notes comprises.
+- **↑ ↓** : changer l'ordre ; les étapes sont renumérotées.
+- **Supprimer** : retire l'étape des rapports. Sa capture est déplacée dans `captures/retirees/`, sans être détruite ; supprimez ce dossier pour l'effacer.
+- **Masquer une zone…** : noircir à la souris une donnée oubliée. Le masquage est définitif : les pixels d'origine ne sont pas conservés.
+- **Exporter le guide** : rapport autonome (un seul fichier HTML), Markdown, ou ouverture du dossier.
+
+Après une modification, un rapport autonome déjà créé contient l'ancienne version, parfois avec l'étape supprimée ou la zone non masquée : StepWatch le supprime et l'indique dans le journal. Exportez-le de nouveau avant de le partager.
 
 ## Captures et rapports
 
@@ -95,7 +112,7 @@ Chaque intervention a son propre dossier :
 | `rapport.md` | Même rapport en Markdown, pour un wiki ou un ticket ; mêmes liens vers `captures/`. |
 | `rapport-autonome.html` | Créé par **Rapport autonome** : un seul fichier, captures intégrées (environ +33 % de taille). |
 
-**Importer ShareX** copie les images d'un dossier, sans ses sous-dossiers, dans une nouvelle intervention et ouvre la vue **Étapes**. Elles sont classées par date de modification, puis par nom. Les sources ne sont jamais modifiées. Les masques ne s'appliquent pas à l'import.
+**Importer ShareX** copie les images d'un dossier, sans ses sous-dossiers, dans une nouvelle intervention et ouvre l'onglet **Guide**. Elles sont classées par date de modification, puis par nom. Les sources ne sont jamais modifiées. Les masques ne s'appliquent pas à l'import.
 
 Les captures peuvent contenir des données confidentielles. Choisissez un dossier adapté et gérez sa protection et sa conservation. Un dossier synchronisé (OneDrive, partage sauvegardé dans le cloud…) enverrait les captures hors du poste. Les masques restent fixes par rapport à la capture et ne détectent pas les mots de passe : n'affichez pas de données sensibles hors des zones masquées.
 
@@ -104,7 +121,7 @@ Si un antivirus ou un outil de synchronisation verrouille brièvement un fichier
 ## Limites de la capture
 
 - Sous Windows et X11, gardez la fenêtre cible dégagée. Les fenêtres qui la recouvrent peuvent apparaître dans la capture.
-- Quand StepWatch reste visible sur un écran entier partagé, la mise à jour de son aperçu peut déclencher une nouvelle capture.
+- Les clics sur StepWatch (barre flottante ou fenêtre principale) sont ignorés. Si la fenêtre principale reste visible sur la cible, elle est noircie dans les captures ; préférez la barre flottante. Sous Wayland, StepWatch ne connaît pas la position de la source partagée et ne peut pas masquer sa propre fenêtre : gardez-la hors de la zone partagée.
 - Un clic n'est rattaché à la cible que s'il tombe sur elle ou sur un dialogue qu'elle possède.
 - Une fenêtre fermée, réduite ou invisible produit une erreur explicite dans le journal.
 - Sous Windows, le bureau sécurisé UAC, les contenus protégés et les fenêtres élevées peuvent empêcher la capture ou la réception des clics.
@@ -129,7 +146,7 @@ Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/
 DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Les images du README montrent une session et un rapport de démonstration avec des données synthétiques. La séparation entre capture et relecture s'inspire d'OpenSteps. [OpenSteps](https://github.com/ebanez8/openstep)
+Les images du README montrent une session et un rapport de démonstration avec des données synthétiques, sous Linux. La barre flottante, l'éditeur de guide et la séparation entre capture et relecture s'inspirent d'[OpenSteps](https://github.com/ebanez8/openstep) (licence MIT) ; aucun code n'en est repris.
 
 Licence : [GNU AGPL v3](LICENSE).
 

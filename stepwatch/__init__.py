@@ -2,7 +2,7 @@
 
 import logging
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # Messages written to the diagnostic file only when diagnostics.setup() runs.
 logging.getLogger(__name__).addHandler(logging.NullHandler())

@@ -67,7 +67,7 @@ Dans une session X11, sélectionnez une fenêtre visible, un moniteur ou une zon
 
 ### Wayland
 
-Dans une session Wayland, **Démarrer** ouvre le sélecteur de partage du bureau. Choisissez l'écran ou la fenêtre à partager selon les sources proposées par le bureau. StepWatch reçoit les images via PipeWire et enregistre les changements visuels. Le bureau peut mettre fin au partage à tout moment. Les réglages de fréquence, de sensibilité et de masquage restent disponibles.
+Dans une session Wayland, **● Enregistrer** ouvre le sélecteur de partage du bureau. Choisissez l'écran ou la fenêtre à partager selon les sources proposées par le bureau. StepWatch reçoit les images via PipeWire et enregistre les changements visuels. Le bureau peut mettre fin au partage à tout moment. Les réglages de fréquence, de sensibilité et de masquage restent disponibles.
 
 Installez les composants de capture manquants et le backend ScreenCast de votre bureau. Par exemple, `xdg-desktop-portal-gnome` pour GNOME, `xdg-desktop-portal-kde` pour KDE Plasma ou `xdg-desktop-portal-wlr` pour Sway. PipeWire doit être actif dans la session utilisateur.
 

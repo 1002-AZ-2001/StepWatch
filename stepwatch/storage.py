@@ -217,9 +217,14 @@ class SessionStore:
             raise StorageError(f"Export incomplet dans {self.directory} : {exc}") from exc
 
     def _html(self) -> str:
-        return (_report_head(self.name, self.started_at, len(self.steps))
-                + "\n".join(_report_article(step, step["image"]) for step in self.steps)
-                + _REPORT_TAIL)
+        return html_report(self.name, self.started_at, self.steps)
+
+
+def html_report(name: str, started_at: str, steps: list[dict[str, Any]]) -> str:
+    """rapport.html of a session, with relative links to captures/."""
+    return (_report_head(name, started_at, len(steps))
+            + "\n".join(_report_article(step, step["image"]) for step in steps)
+            + _REPORT_TAIL)
 
 
 _TRIGGER_LABELS = {
@@ -238,6 +243,8 @@ _REPORT_STYLE = (
     'padding:24px;border-radius:12px;margin:20px 0}h1{margin-top:0}h2{font-size:20px}'
     'time{color:#576176}img{display:block;max-width:100%;height:auto;margin-top:18px;'
     'border:1px solid #ddd}.annotation{white-space:pre-wrap}footer{color:#576176}'
+    '.kind{display:inline-block;margin:0 10px 8px 0;padding:2px 10px;border-radius:999px;'
+    'background:#eef2ff;color:#1d3a8f;font-size:13px}'
     '@media print{body{background:white;margin:0}article{break-inside:avoid;'
     'border:1px solid #ddd}img{max-height:75vh;object-fit:contain}}'
 )
@@ -290,6 +297,15 @@ def step_trigger_label(step: dict[str, Any]) -> str:
     return trigger
 
 
+#: Longest step title kept in steps.json and the reports.
+TITLE_MAX_LENGTH = 200
+
+
+def step_heading(step: dict[str, Any]) -> str:
+    """Title edited in the guide, or the trigger label by default."""
+    return str(step.get("title") or "").strip() or step_trigger_label(step)
+
+
 def _report_details(step: dict[str, Any]) -> str:
     annotation = (
         f'<p class="annotation">{html.escape(step["annotation"])}</p>'
@@ -301,8 +317,11 @@ def _report_details(step: dict[str, Any]) -> str:
         if step["click"] is not None else ""
     )
     index = html.escape(str(step["index"]))
+    kind = step_trigger_label(step)
+    heading = step_heading(step)
+    kind_line = f'<p class="kind">{html.escape(kind)}</p>' if heading != kind else ""
     return (
-        f'<article><h2>Étape {index} — {html.escape(step_trigger_label(step))}</h2>'
+        f'<article><h2>Étape {index} — {html.escape(heading)}</h2>{kind_line}'
         f'<time datetime="{html.escape(step["timestamp"], quote=True)}">'
         f'{html.escape(_local_time(step["timestamp"]))}</time>{annotation}{click}'
     )
@@ -354,9 +373,12 @@ def _markdown(name: str, started_at: str, steps: list[dict[str, Any]]) -> str:
              f"{_markdown_text(_local_time(started_at))} (heure locale du poste)", ""]
     for step in steps:
         trigger = step_trigger_label(step)
+        heading = step_heading(step)
         index = int(step["index"])
-        lines += [f"## Étape {index} — {_markdown_text(trigger)}", "",
-                  f"*{_markdown_text(_local_time(step['timestamp']))}*", ""]
+        lines += [f"## Étape {index} — {_markdown_text(heading)}", ""]
+        if heading != trigger:
+            lines += [_markdown_text(trigger), ""]
+        lines += [f"*{_markdown_text(_local_time(step['timestamp']))}*", ""]
         for line in str(step.get("annotation") or "").splitlines():
             lines += [_markdown_text(line) + "  "]
         if step.get("annotation"):
@@ -400,6 +422,7 @@ def read_session(directory: Path) -> tuple[str, str, list[dict[str, Any]]]:
                 "click": click,
                 "click_count": int(step.get("click_count", 1 if click is not None else 0)),
                 "annotation": str(step.get("annotation") or ""),
+                "title": str(step.get("title") or "")[:TITLE_MAX_LENGTH],
             })
         return str(metadata.get("name") or "Intervention"), str(metadata.get("started_at", "")), steps
     except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:

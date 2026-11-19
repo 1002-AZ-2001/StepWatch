@@ -21,7 +21,7 @@ from typing import Callable
 from stepwatch.display import display_problem
 from stepwatch.events import PreviewEventQueue
 from stepwatch.imaging import VisualComparator, paint_click, paint_masks, preview_image
-from stepwatch.models import CaptureConfig, CaptureTarget
+from stepwatch.models import CaptureConfig, CaptureTarget, Rect
 from stepwatch.platform import (
     DEFAULT_DOUBLE_CLICK, CaptureCancelled, CaptureEnded, CaptureUnavailable, capture_backend_factory,
 )
@@ -121,6 +121,7 @@ class Recorder:
         self._last_hook_event = float("-inf")  # Monotonic; any press/release.
         self.hook_restarts = 0
         self._slow_hook = 0.0  # Slowest hit-test since last logged, seconds.
+        self._excluded = ((), ())  # StepWatch windows: (click regions, masked regions).
 
     @property
     def state(self):
@@ -214,6 +215,26 @@ class Recorder:
             else:
                 self._emit("note", f"Note ajoutée à l’étape {step['index']}.", step=step)
 
+    def set_excluded_regions(self, regions, masked=()) -> None:
+        """Screen rectangles of StepWatch's own windows (desktop coordinates).
+
+        Clicks inside ``regions`` never become steps. The parts of ``masked``
+        overlapping the target are painted black in captures, for windows the
+        platform cannot exclude from screen capture. Called from the interface
+        thread; the tuple is replaced atomically.
+        """
+        self._excluded = (tuple(regions), tuple(masked))
+
+    def _excluded_masks(self, rect):
+        """Target-relative masks covering StepWatch windows inside ``rect``."""
+        masks = []
+        for region in self._excluded[1]:
+            left, top = max(region.left, rect.left), max(region.top, rect.top)
+            right, bottom = min(region.right, rect.right), min(region.bottom, rect.bottom)
+            if left < right and top < bottom:
+                masks.append(Rect(left - rect.left, top - rect.top, right - left, bottom - top))
+        return tuple(masks)
+
     def _on_click(self, x, y, button, pressed):
         # A release is not another click. Coalesce duplicate hook notifications,
         # preserving real double-clicks (usually > 30 ms apart).
@@ -224,6 +245,8 @@ class Recorder:
         if not pressed:
             return
         x, y = int(x), int(y)
+        if any(region.contains(x, y) for region in self._excluded[0]):
+            return  # A click on StepWatch itself (floating bar, main window).
         with self._lock:
             if self._state != "recording" or self.config.mode == "visual":
                 return
@@ -546,7 +569,8 @@ class Recorder:
                         last_error = None
                     if frame.mode != "RGB":
                         frame = frame.convert("RGB")
-                    paint_masks(frame, self.config.masks)
+                    masks = self.config.masks + self._excluded_masks(rect)
+                    paint_masks(frame, masks)
                     sample = comparator.prepare(frame) if comparator is not None else None
                     if visual and comparator.reference is None:
                         trigger = "initial"
@@ -564,7 +588,7 @@ class Recorder:
                         if sample is not None and sample.pixels is frame:
                             output = frame.copy()
                         paint_click(output, click)
-                        paint_masks(output, self.config.masks)
+                        paint_masks(output, masks)
                     # Recheck after analysis and an earlier write. Pause, Stop
                     # and click acceptance are serialized with submission.
                     with self._lock:

@@ -202,7 +202,10 @@ def freeze(work: Path) -> Path:
     build_environment = os.environ.copy()
     build_environment["PYINSTALLER_CONFIG_DIR"] = str(work / "pyinstaller-cache")
     subprocess.run(
+        # ImageTk loads PIL._tkinter_finder dynamically: PyInstaller misses it
+        # and Tk then fails with 'invalid command name "PyImagingPhoto"'.
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
+         "--hidden-import", "PIL._tkinter_finder",
          "--name", "StepWatch", "--paths", str(ROOT),
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
          "--specpath", str(work), "--add-data", f"{ROOT / 'stepwatch' / '_wayland_portal.py'}:stepwatch",

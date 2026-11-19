@@ -15,7 +15,10 @@ StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en fra
 | `events.py` | File d'événements qui ne garde qu'un aperçu en attente, sans perdre les messages ni les erreurs. |
 | `storage.py` | PNG, `steps.json`, `rapport.html`, `rapport.md`, rapport autonome et import ShareX ; écritures atomiques réessayées sous Windows. |
 | `ui.py` | Fenêtre principale ; tous les appels Tk restent sur le thread principal. |
-| `review.py` | Liste paginée des étapes d'une session et lecture de la seule image sélectionnée. |
+| `review.py` | Éditeur de guide : liste paginée des étapes, lecture de la seule image sélectionnée, titres et descriptions modifiables, ordre, suppression, fenêtre de masquage a posteriori. |
+| `guide.py` | Modifications d'une session terminée : `steps.json`, `rapport.html` et `rapport.md` réécrits atomiquement ; capture d'une étape supprimée déplacée dans `captures/retirees/` ; masquage définitif d'une zone ; suppression d'un rapport autonome devenu obsolète. |
+| `floating.py` | Barre flottante pendant l'enregistrement : état, nombre d'étapes, pause, note, arrêt, retour à la fenêtre. |
+| `theme.py` | Palette, styles ttk (thème « clam ») et icône StepWatch dessinée avec Pillow. |
 | `display.py` | Type de session (X11, Wayland) et message explicite quand Tk ne peut pas s'afficher, par exemple sous Wayland sans XWayland ; classe de fenêtre `Stepwatch` pour les docks. |
 | `selftest.py` | `stepwatch --self-test` vérifie une session synthétique, les rapports, un import ShareX et l'interface. Sous X11, il vérifie aussi une capture réelle de la fenêtre d'auto-test. |
 | `diagnostics.py` | Journal local en rotation et capture des exceptions non gérées (threads, rappels Tk, plantages natifs). |
@@ -34,6 +37,6 @@ Le moteur attend la fin de l'écriture en cours avant d'ajouter une note ou de f
 - **Local uniquement** : aucune capture, aucun journal ni aucune télémétrie n'est envoyé sur le réseau.
 - **Aucune frappe clavier** n'est enregistrée. Les seuls textes saisis conservés sont le nom de l'intervention et les notes.
 - **Masques avant écriture** : les zones masquées sont noircies avant la comparaison, l'aperçu et l'écriture, puis de nouveau après le marqueur de clic.
-- **Rien au lancement** : aucun hook ni aucune capture avant **Démarrer**.
+- **Rien au lancement** : aucun hook ni aucune capture avant **● Enregistrer**.
 - **Sources ShareX intactes** : l'import copie les images, sans jamais modifier ni supprimer les originaux.
 - **Rapport autonome restreint** : seuls les PNG du dossier `captures/` de la session sont intégrés. Les chemins absolus, les liens symboliques et les jonctions sont refusés.
