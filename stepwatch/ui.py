@@ -135,11 +135,16 @@ class StepWatchApp:
     def _style(self) -> None:
         self._ui_font, self._mono_font = pick_fonts(self.root)
         apply_theme(self.root, self._ui_font, self._px(34))
-        # Window/dock icon, drawn like packaging/linux/stepwatch.svg.
-        self._icons = [ImageTk.PhotoImage(render_icon(self._px(size)), master=self.root) for size in (64, 32, 16)]
-        self.root.iconphoto(True, *self._icons)
-        self._header_icon = ImageTk.PhotoImage(render_icon(self._px(34)), master=self.root)
-        self._bar_icon = ImageTk.PhotoImage(render_icon(self._px(20)), master=self.root)
+        # Window/dock icon, drawn like packaging/linux/stepwatch.svg. An icon
+        # must never prevent StepWatch from starting.
+        try:
+            self._icons = [ImageTk.PhotoImage(render_icon(self._px(size)), master=self.root) for size in (64, 32, 16)]
+            self.root.iconphoto(True, *self._icons)
+            self._header_icon = ImageTk.PhotoImage(render_icon(self._px(34)), master=self.root)
+            self._bar_icon = ImageTk.PhotoImage(render_icon(self._px(20)), master=self.root)
+        except (tk.TclError, ImportError) as exc:
+            LOGGER.warning("Icône indisponible : %s", exc)
+            self._icons, self._header_icon, self._bar_icon = [], "", None
 
     def _setting(self, widget: tk.Widget, state: str = "normal") -> tk.Widget:
         if isinstance(widget, ttk.Entry):
