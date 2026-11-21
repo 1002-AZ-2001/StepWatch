@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from stepwatch.guide import RETIRED_FOLDER, redact_step, remove_step, save_guide
+from stepwatch.guide import RETIRED_FOLDER, redact_step, remove_step, restore_step, save_guide
 from stepwatch.storage import (MARKDOWN_REPORT, STANDALONE_REPORT, SessionStore, StorageError,
                                export_standalone, read_session, step_heading)
 
@@ -74,6 +74,29 @@ class GuideEditingTests(unittest.TestCase):
         self.assertTrue(retired.is_file())
         self.assertFalse((self.directory / removed).exists())
         self.assertNotIn(Path(removed).name, (self.directory / "rapport.html").read_text(encoding="utf-8"))
+
+    def test_removed_step_can_be_restored_exactly(self):
+        before = [dict(step) for step in self.steps]
+        removal = remove_step(self.directory, self.name, self.steps, 1)
+        self.assertTrue(removal.retired.is_file())
+        restore_step(self.directory, self.name, before, removal.retired, before[1]["image"])
+        steps = self.reload()
+        self.assertEqual([step["image"] for step in steps], [step["image"] for step in before])
+        self.assertTrue((self.directory / before[1]["image"]).is_file())
+        self.assertFalse(removal.retired.exists())
+
+    def test_restore_refuses_foreign_files_and_occupied_targets(self):
+        before = [dict(step) for step in self.steps]
+        removal = remove_step(self.directory, self.name, self.steps, 1)
+        outside = Path(self.temporary.name) / "intrus.png"
+        outside.write_bytes(b"x")
+        with self.assertRaises(StorageError):
+            restore_step(self.directory, self.name, before, outside, before[1]["image"])
+        with self.assertRaises(StorageError):  # Target already used by another capture.
+            restore_step(self.directory, self.name, before, removal.retired, before[0]["image"])
+        with self.assertRaises(StorageError):
+            restore_step(self.directory, self.name, before, removal.retired, "../evasion.png")
+        self.assertTrue(removal.retired.is_file())
 
     def test_redaction_replaces_pixels_and_drops_the_stale_standalone_report(self):
         export_standalone(self.directory)

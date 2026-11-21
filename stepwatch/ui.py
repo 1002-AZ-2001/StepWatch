@@ -19,11 +19,14 @@ from PIL import Image, ImageTk
 from .display import WINDOW_CLASS
 from .engine import Recorder
 from .floating import FloatingBar
+from .hotkeys import LABELS as HOTKEY_LABELS, TK_SEQUENCES, GlobalHotkeys
 from .imaging import preview_image
 from .models import CaptureConfig, CaptureTarget, Rect
 from .platform import capture_backend_factory, exclude_from_capture
 from .review import SessionReview
 from .storage import SessionStore, export_markdown, export_standalone, import_sharex
+from .library import recent_guides
+from .settings import Preferences
 from .theme import PALETTE, STATUS_COLOURS, apply_theme, pick_fonts, render_icon
 
 LOGGER = logging.getLogger(__name__)
@@ -50,8 +53,11 @@ class StepWatchApp:
         "error": "Erreur · consulter le journal",
     }
 
-    def __init__(self, root: tk.Tk, log_path: Path | None = None) -> None:
+    def __init__(self, root: tk.Tk, log_path: Path | None = None,
+                 preferences: Preferences | None = None) -> None:
         self.root = root
+        # Sans préférences (tests, auto-test), rien n'est lu ni écrit sur disque.
+        self._prefs = preferences
         self._ui_thread = threading.get_ident()
         self._disposed = False
         # Sans console (exécutable --windowed), Tk écrirait ces erreurs sur
@@ -88,6 +94,8 @@ class StepWatchApp:
         self._compact_session = False
         self._withdrawn = False
         self._regions_key = None
+        self._hotkeys = GlobalHotkeys() if GlobalHotkeys.supported() else None
+        self._hotkeys_on = False
 
         self.name = tk.StringVar(value="Nouvelle intervention")
         self.output = tk.StringVar(value=str(Path.home() / "Documents" / "StepWatch"))
@@ -107,6 +115,10 @@ class StepWatchApp:
 
         self._style()
         self._build()
+        self._apply_preferences()
+        # Mêmes combinaisons que les raccourcis globaux, dans les fenêtres de StepWatch.
+        for action, sequence in TK_SEQUENCES.items():
+            self.root.bind_all(sequence, lambda _event, action=action: self._hotkey(action), add="+")
         if log_path is not None:
             self._write_log(f"Journal de diagnostic : {log_path}", level=None)
         self._refresh_targets()
@@ -186,7 +198,10 @@ class StepWatchApp:
         self._status_label.pack(side="left")
         self.import_button = ttk.Button(heading, text="Importer ShareX", command=self._import)
         self.import_button.pack(side="right", padx=(8, 0))
-        self.open_session_button = ttk.Button(heading, text="Ouvrir un guide", command=self._choose_session)
+        self.open_session_button = ttk.Menubutton(heading, text="Ouvrir un guide", style="Secondary.TMenubutton")
+        self._recent_menu = tk.Menu(self.open_session_button, tearoff=False, font=(self._ui_font, 10),
+                                    postcommand=self._fill_recent_menu)
+        self.open_session_button.configure(menu=self._recent_menu)
         self.open_session_button.pack(side="right")
         ttk.Frame(outer, style="Rule.TFrame", height=1).grid(row=1, column=0, sticky="new")
 
@@ -300,7 +315,9 @@ class StepWatchApp:
         preview.rowconfigure(1, weight=1)
         ttk.Label(preview, text="Dernière capture", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
         # The image must not determine the label's requested size.
-        empty_preview = ("L’aperçu apparaîtra après la première étape.\nPendant l’enregistrement, StepWatch se réduit en une petite barre flottante."
+        empty_preview = ("L’aperçu apparaîtra après la première étape.\nPendant l’enregistrement, StepWatch se réduit en une petite barre flottante.\n\n"
+                         "Ctrl+Maj+F9 pause/reprise · Ctrl+Maj+F10 note · Ctrl+Maj+F11 arrêt"
+                         + (" (dans toutes les applications)" if sys.platform == "win32" else "")
                          if self._backend is not None
                          else "Importez un dossier ShareX ou ouvrez un guide pour le modifier dans l’onglet Guide.")
         self.preview = tk.Label(preview, text=empty_preview, justify="center",
@@ -448,9 +465,82 @@ class StepWatchApp:
             self._review.load(Path(selected))
             self._update_controls()
 
+    def _fill_recent_menu(self) -> None:
+        """Guides récents : dossiers déjà ouverts et interventions du dossier des guides."""
+        from datetime import datetime
+
+        menu = self._recent_menu
+        menu.delete(0, "end")
+        remembered = self._prefs.values["recent"] if self._prefs is not None else ()
+        entries = recent_guides(self.output.get().strip() or None, remembered)
+        if entries:
+            menu.add_command(label="Guides récents", state="disabled")
+            for entry in entries:
+                when = datetime.fromtimestamp(entry.modified).strftime("%d/%m/%Y %H:%M")
+                menu.add_command(label=f"{entry.name}  ·  {when}",
+                                 command=lambda directory=entry.directory: self._open_guide(directory))
+            menu.add_separator()
+        menu.add_command(label="Parcourir…", command=self._choose_session)
+
+    def _open_guide(self, directory: Path) -> None:
+        if self._active() or self._background_running() or self._closing:
+            return
+        self._review.load(Path(directory))
+        self._tabs.select(self._review)
+        self._update_controls()
+
     def _use_session(self, directory: Path) -> None:
         self._session_dir = directory
         self.session_text.set(str(directory))
+        if self._prefs is not None:
+            self._prefs.remember_guide(directory)
+            self._prefs.save()
+
+    # ----- Préférences ----------------------------------------------------------
+
+    def _apply_preferences(self) -> None:
+        if self._prefs is None:
+            return
+        values = self._prefs.values
+        for variable, key in ((self.output, "output"), (self.interval, "interval"),
+                              (self.delay, "delay"), (self.sensitivity, "sensitivity")):
+            if values[key]:
+                variable.set(values[key])
+        self.conservative.set(values["conservative"])
+        self.compact.set(values["compact"])
+        if values["source"] in self.SOURCES and not self._uses_portal:
+            self.source.set(values["source"])
+        if values["mode"] in self.MODES and not self._uses_portal:
+            self.mode.set(values["mode"])
+        if values["masks"]:
+            self.masks_text.delete("1.0", "end")
+            self.masks_text.insert("1.0", values["masks"])
+        if values["advanced_open"] != self._advanced_open.get():
+            self._toggle_advanced()
+        geometry = values["geometry"]
+        if geometry:
+            try:
+                width, height = (int(part) for part in geometry.split("+")[0].split("-")[0].split("x"))
+            except ValueError:
+                width = height = 0
+            # Ignore a size saved on a larger screen than the current one.
+            if 0 < width <= self.root.winfo_screenwidth() and 0 < height <= self.root.winfo_screenheight():
+                self.root.geometry(geometry)
+
+    def _store_preferences(self) -> None:
+        if self._prefs is None:
+            return
+        values = self._prefs.values
+        values.update(output=self.output.get(), interval=self.interval.get(), delay=self.delay.get(),
+                      sensitivity=self.sensitivity.get(), conservative=self.conservative.get(),
+                      compact=self.compact.get(), source=self.source.get(), mode=self.mode.get(),
+                      masks=self.masks_text.get("1.0", "end-1c"), advanced_open=self._advanced_open.get())
+        try:
+            if not self._withdrawn and self.root.state() == "normal":
+                values["geometry"] = self.root.geometry()
+        except tk.TclError:
+            pass
+        self._prefs.save()
 
     def _guide_changed(self, message: str) -> None:
         self._write_log(message)
@@ -583,6 +673,7 @@ class StepWatchApp:
             recorder.start()
             self._compact_session = self.compact.get()
             self._regions_key = None
+            self._store_preferences()
             self._write_log(f"Intervention : {self.name.get().strip()} — {target.label}")
             self._write_log(f"Rapport local : {store.directory}")
         except Exception as exc:
@@ -767,6 +858,7 @@ class StepWatchApp:
             self._review.poll()
             self._update_controls()
             self._sync_floating_bar()
+            self._sync_hotkeys()
         except Exception as exc:
             self._report_ui_error(exc)
         finally:
@@ -798,6 +890,43 @@ class StepWatchApp:
                 self._hide_floating_bar()
         if recorder is not None and state in self.ACTIVE_STATES:
             self._send_regions(recorder)
+
+    # ----- Raccourcis pendant l’enregistrement --------------------------------
+
+    def _sync_hotkeys(self) -> None:
+        state = self._recorder.state if self._recorder is not None else "idle"
+        hotkeys = self._hotkeys
+        if hotkeys is None:
+            return
+        wanted = state in {"recording", "paused"} and not self._closing
+        if wanted and not self._hotkeys_on:
+            self._hotkeys_on = True
+            if hotkeys.start():
+                labels = ", ".join(f"{HOTKEY_LABELS[name]} {text}" for name, text in
+                                   (("pause", "pause/reprise"), ("note", "note"), ("stop", "arrêt")))
+                self._write_log(f"Raccourcis actifs dans toutes les applications : {labels}.")
+                for label in hotkeys.failed:
+                    self._write_log(f"Raccourci {label} déjà utilisé par une autre application : indisponible.")
+        elif not wanted and self._hotkeys_on:
+            self._hotkeys_on = False
+            hotkeys.stop()
+        while True:
+            try:
+                action = hotkeys.events.get_nowait()
+            except queue.Empty:
+                break
+            self._hotkey(action)
+
+    def _hotkey(self, action: str) -> None:
+        state = self._recorder.state if self._recorder is not None else "idle"
+        if state not in {"recording", "paused"} or self._closing:
+            return
+        if action == "pause":
+            self._resume() if state == "paused" else self._pause()
+        elif action == "note":
+            self._add_note()
+        elif action == "stop":
+            self._stop()
 
     def _hide_floating_bar(self) -> None:
         if self._bar is not None:
@@ -973,6 +1102,9 @@ class StepWatchApp:
             return
         if threading.get_ident() != getattr(self, "_ui_thread", threading.get_ident()):
             raise RuntimeError("Les ressources Tk doivent être libérées sur le thread de l’interface.")
+        hotkeys = getattr(self, "_hotkeys", None)
+        if hotkeys is not None:
+            hotkeys.stop()
         bar = getattr(self, "_bar", None)
         if bar is not None:
             try:
@@ -1014,6 +1146,10 @@ class StepWatchApp:
         if self._active() and not messagebox.askyesno("Fermer StepWatch", "Arrêter l’intervention et finaliser le rapport avant de fermer ?", parent=self.root):
             return
         self._closing = True
+        try:
+            self._store_preferences()
+        except Exception:
+            LOGGER.exception("Préférences non enregistrées à la fermeture")
         self._finish_close()
 
     def _finish_close(self) -> None:
@@ -1051,7 +1187,7 @@ def run_app(log_path: Path | None = None) -> None:
     root = tk.Tk(className=WINDOW_CLASS)
     app = None
     try:
-        app = StepWatchApp(root, log_path)
+        app = StepWatchApp(root, log_path, preferences=Preferences())
         root.mainloop()
     finally:
         # Ctrl+C dans la console ou exception sortie de la boucle Tk : sans

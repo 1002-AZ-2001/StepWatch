@@ -128,6 +128,17 @@ If an antivirus or a sync tool briefly locks a file, the write is retried. If th
 - Windows can silently remove a slow low-level mouse hook. StepWatch detects this through the physical button state, reinstalls the hook and reports it ("des clics ont pu manquer", clicks may have been missed): check the latest steps.
 - The visual comparison ignores small variations, without a guarantee for every animation. A change shorter than the interval can go unnoticed.
 
+## Keyboard shortcuts, preferences
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+Shift+F9 / F10 / F11 | Pause or resume / add a note / stop recording |
+| Delete, Ctrl+↑/↓, Ctrl+Z, F2 | Guide tab: remove, move, undo, edit the step title |
+
+On Windows, the three recording shortcuts work in every application: StepWatch reserves them with `RegisterHotKey`, which reports only those combinations; no other keystroke is observed. On Linux, they work while a StepWatch window has focus. **↶ Annuler** (Ctrl+Z) undoes title, description, name, order and removal changes (masking is permanent). **Ouvrir un guide ▾** lists recent guides.
+
+StepWatch remembers the guides folder, target, mode, advanced settings, masks, floating bar, window size and recent guides in a local `settings.json` (`%APPDATA%\StepWatch` on Windows, `~/.config/stepwatch` on Linux). Only one StepWatch window can be open at a time.
+
 ## Diagnostic log
 
 The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/stepwatch/` on Linux) rotates over at most 4 files of 1 MB. `crash.log` collects native crashes. These files contain no image or keystroke, but may contain session names, window titles and paths: review them before sharing.

@@ -24,6 +24,7 @@ class EntrypointTests(unittest.TestCase):
                      patch("stepwatch.__main__.diagnostics.reset", side_effect=lambda: actions.append("reset")), \
                      patch("stepwatch.__main__.enable_dpi_awareness", side_effect=lambda: actions.append("dpi")), \
                      patch("stepwatch.__main__.display_problem", return_value=None), \
+                     patch("stepwatch.__main__.InstanceLock"), \
                      patch("stepwatch.ui.run_app", side_effect=run):
                     if error:
                         with self.assertRaisesRegex(RuntimeError, "boucle graphique"):
@@ -55,9 +56,30 @@ class EntrypointTests(unittest.TestCase):
         with patch("stepwatch.__main__.diagnostics.setup", return_value=None), \
              patch("stepwatch.__main__.diagnostics.reset"), \
              patch("stepwatch.__main__.display_problem", return_value=None), \
+             patch("stepwatch.__main__.InstanceLock"), \
              patch("stepwatch.ui.run_app") as run_app:
             self.assertEqual(main(["--fichier-inconnu"]), 0)
         run_app.assert_called_once()
+
+    def test_second_instance_is_refused_without_starting_tk(self):
+        with patch("stepwatch.__main__.diagnostics.setup", return_value=None), \
+             patch("stepwatch.__main__.diagnostics.reset"), \
+             patch("stepwatch.__main__.display_problem", return_value=None), \
+             patch("stepwatch.__main__.InstanceLock") as lock, \
+             patch("stepwatch.__main__._tell_already_running") as told, \
+             patch("stepwatch.ui.run_app") as run_app:
+            lock.return_value.acquire.return_value = False
+            self.assertEqual(main([]), 3)
+        told.assert_called_once()
+        run_app.assert_not_called()
+
+    def test_self_test_runs_even_when_stepwatch_is_open(self):
+        with patch("stepwatch.__main__.diagnostics.setup", return_value=None), \
+             patch("stepwatch.__main__.diagnostics.reset"), \
+             patch("stepwatch.__main__.InstanceLock") as lock, \
+             patch("stepwatch.selftest.run", return_value=0):
+            self.assertEqual(main(["--self-test"]), 0)
+        lock.assert_not_called()
 
 
 if __name__ == "__main__":

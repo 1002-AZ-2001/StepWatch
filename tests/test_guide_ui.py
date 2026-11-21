@@ -148,6 +148,66 @@ class GuideInterfaceTests(unittest.TestCase):
         with Image.open(self.directory / review.steps[0]["image"]) as image:
             self.assertEqual(image.getpixel((5, 5)), (0, 0, 0))
 
+    def test_undo_reverts_order_title_name_and_removal(self):
+        review = self.open_guide()
+        images = [step["image"] for step in review.steps]
+        self.assertEqual(str(review.undo_button["state"]), "disabled")
+        self.select(review, 0)
+        review.down_button.invoke()
+        self.pump(lambda: review._selected == "1" and not review.busy)
+        review.step_title_text.set("Titre provisoire")
+        review._commit_step()
+        review.guide_name.set("Autre nom")
+        review._commit_name()
+        with patch("stepwatch.review.messagebox.askyesno", return_value=True):
+            review.delete_button.invoke()
+        self.assertEqual(len(review.steps), 2)
+
+        review.undo()  # Removal: the capture comes back from captures/retirees/.
+        self.assertEqual(len(review.steps), 3)
+        self.assertFalse(any((self.directory / "captures" / RETIRED_FOLDER).glob("*.png")))
+        review.undo()  # Guide name.
+        self.assertEqual(read_session(self.directory)[0], "Guide de test")
+        review.undo()  # Step title.
+        self.assertEqual([step["title"] for step in read_session(self.directory)[2]], ["", "", ""])
+        review.undo()  # Order.
+        self.assertEqual([step["image"] for step in read_session(self.directory)[2]], images)
+        self.assertEqual(str(review.undo_button["state"]), "disabled")
+
+    def test_keyboard_shortcuts_act_on_the_selected_step(self):
+        review = self.open_guide()
+        images = [step["image"] for step in review.steps]
+        self.app._tabs.select(review)  # Shortcuts only act when the Guide tab is shown.
+        self.select(review, 0)
+        review.list.focus_set()
+        self.root.update()
+        review.list.event_generate("<Control-Down>")
+        self.pump(lambda: review._selected == "1" and not review.busy)
+        self.assertEqual(read_session(self.directory)[2][1]["image"], images[0])
+        review.list.event_generate("<Control-z>")
+        self.pump(lambda: read_session(self.directory)[2][0]["image"] == images[0]
+                  and review._selected is not None and not review.busy)
+        with patch("stepwatch.review.messagebox.askyesno", return_value=True) as asked:
+            review.list.event_generate("<Delete>")
+            self.root.update()
+        asked.assert_called_once()
+        self.assertEqual(len(read_session(self.directory)[2]), 2)
+        # While typing, Delete and Ctrl+Z keep their text meaning.
+        self.select(review, 0)
+        review.title_entry.focus_set()
+        self.root.update()
+        with patch("stepwatch.review.messagebox.askyesno") as asked:
+            review.title_entry.event_generate("<Delete>")
+            self.root.update()
+        asked.assert_not_called()
+        # Hidden Guide tab: the shortcut does nothing.
+        self.app._tabs.select(0)
+        self.root.update()
+        with patch("stepwatch.review.messagebox.askyesno") as asked:
+            self.root.event_generate("<Delete>")
+            self.root.update()
+        asked.assert_not_called()
+
     def test_editing_is_disabled_while_recording(self):
         review = self.open_guide()
         self.select(review, 0)
@@ -183,6 +243,32 @@ class GuideInterfaceTests(unittest.TestCase):
         self.pump(lambda: len(recorder.regions[0]) == 2)  # Main window visible again.
         bar.stop_button.invoke()
         self.pump(lambda: self.app._bar is None and self.root.winfo_ismapped())
+
+    def test_recording_shortcuts_in_stepwatch_windows(self):
+        recorder = FakeRecorder()
+        self.app._recorder = recorder
+        self.app._compact_session = False
+        self.pump()
+        self.root.event_generate("<Control-Shift-F9>")
+        self.assertEqual(recorder.state, "paused")
+        self.root.event_generate("<Control-Shift-F9>")
+        self.assertEqual(recorder.state, "recording")
+        self.root.event_generate("<Control-Shift-F11>")
+        self.assertEqual(recorder.state, "stopped")
+        self.root.event_generate("<Control-Shift-F9>")  # Inactive once stopped.
+        self.assertEqual(recorder.state, "stopped")
+
+    def test_recent_guides_menu_opens_a_guide(self):
+        self.app._fill_recent_menu()
+        menu = self.app._recent_menu
+        labels = [menu.entrycget(index, "label") for index in range(menu.index("end") + 1)
+                  if menu.type(index) == "command"]
+        self.assertIn("Parcourir…", labels)
+        entry = next(index for index in range(menu.index("end") + 1)
+                     if menu.type(index) == "command" and "Guide de test" in menu.entrycget(index, "label"))
+        menu.invoke(entry)
+        self.pump(lambda: self.app._review.directory == self.directory and not self.app._review.busy)
+        self.assertEqual(self.app._tabs.select(), str(self.app._review))
 
     def test_no_floating_bar_when_compact_mode_is_off(self):
         self.app.compact.set(False)

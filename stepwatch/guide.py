@@ -15,7 +15,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from PIL import Image, ImageDraw
 
@@ -35,7 +35,8 @@ def _one_line(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def save_guide(directory: Path, name: str, steps: list[dict[str, Any]]) -> bool:
+def save_guide(directory: Path, name: str, steps: list[dict[str, Any]], *,
+               restored: tuple[str, ...] = ()) -> bool:
     """Write the guide in this order and rebuild its reports.
 
     ``steps`` must reference captures of this session. Indexes are
@@ -44,7 +45,8 @@ def save_guide(directory: Path, name: str, steps: list[dict[str, Any]]) -> bool:
     """
     directory = Path(directory)
     _, started_at, current = read_session(directory)
-    known = {step["image"] for step in current}
+    # ``restored``: a capture just moved back from captures/retirees/ (undo).
+    known = {step["image"] for step in current} | set(restored)
     clean: list[dict[str, Any]] = []
     seen: set[str] = set()
     for position, step in enumerate(steps, start=1):
@@ -79,11 +81,16 @@ def save_guide(directory: Path, name: str, steps: list[dict[str, Any]]) -> bool:
     return False
 
 
-def remove_step(directory: Path, name: str, steps: list[dict[str, Any]], position: int) -> bool:
+class Removal(NamedTuple):
+    deleted_standalone: bool
+    retired: Path  # Where the capture now is, for restore_step().
+
+
+def remove_step(directory: Path, name: str, steps: list[dict[str, Any]], position: int) -> Removal:
     """Remove ``steps[position]`` from the guide; its PNG moves to captures/retirees/.
 
     The guide is saved first: if moving the PNG then fails, the capture only
-    stays unreferenced in captures/. Returns save_guide's result.
+    stays unreferenced in captures/.
     """
     removed = steps[position]
     source = capture_path(Path(directory), removed)
@@ -100,7 +107,30 @@ def remove_step(directory: Path, name: str, steps: list[dict[str, Any]], positio
         os.replace(source, destination)
     except OSError as exc:
         raise StorageError(f"Étape retirée du guide, mais capture non déplacée ({source.name}) : {exc}") from exc
-    return deleted_standalone
+    return Removal(deleted_standalone, destination)
+
+
+def restore_step(directory: Path, name: str, steps: list[dict[str, Any]], retired: Path, image: str) -> bool:
+    """Undo remove_step: put the retired PNG back at ``image``, then save ``steps``.
+
+    ``steps`` is the guide as it was before the removal. Returns save_guide's
+    result. Refuses a file outside captures/retirees/ or an occupied target.
+    """
+    directory = Path(directory)
+    captures = (directory / "captures").resolve()
+    retired = Path(retired)
+    if retired.resolve().parent != captures / RETIRED_FOLDER or not retired.is_file():
+        raise StorageError(f"Capture retirée introuvable : {retired.name}.")
+    target = directory / image
+    if target.resolve().parent != captures or Path(image).suffix.lower() != ".png":
+        raise StorageError(f"Emplacement de capture refusé : {image}.")
+    if target.exists():
+        raise StorageError(f"Une capture occupe déjà {image} : restauration impossible.")
+    try:
+        os.replace(retired, target)
+    except OSError as exc:
+        raise StorageError(f"Restauration de {retired.name} impossible : {exc}") from exc
+    return save_guide(directory, name, steps, restored=(image,))
 
 
 def redact_step(directory: Path, name: str, steps: list[dict[str, Any]], position: int,

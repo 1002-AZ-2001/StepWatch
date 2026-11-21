@@ -2,6 +2,10 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 0.8 — confort d'utilisation
+
+Préférences retenues entre deux lancements, raccourcis clavier (globaux sous Windows pendant l'enregistrement), annulation dans l'éditeur (suppression comprise), guides récents et instance unique. Tout est vérifié par la CI ; les raccourcis globaux et le verrou Windows sont aussi appelés par le test de fumée Windows.
+
 ## Version 0.7 — interface et éditeur de guide
 
 Nouvelle interface (thème clair, barre d'enregistrement, réglages avancés repliés), barre flottante pendant l'enregistrement, et onglet **Guide** pour modifier une intervention avant de la partager. Inspiré d'OpenSteps pour l'usage. [Validation](validation.md)
@@ -56,6 +60,9 @@ Un rapport est fait pour être transmis. Ce chantier traite le risque principal 
 | --- | --- | --- | --- |
 | Annotations sur les captures | Flèches, rectangles et numéros sur une capture, comme dans OpenSteps, sans écraser l'original. | Moyen. | Copie de l'image à gérer dans les rapports. |
 | Remplacer une capture | Importer ou coller une autre image quand la capture est mauvaise. | Faible. | Vérifier le masquage de l'image importée. |
+| Étape manuelle | Ajouter une étape de texte, ou prendre une capture à la demande. | Faible à moyen. | — |
+| Titres d'étape automatiques | « Cliquer sur le bouton « Enregistrer » » grâce à UI Automation (Windows), comme OpenSteps. | Moyen à élevé. | Interrogation hors du hook (délai `LowLevelHooksTimeout`) ; certaines applications ne nomment pas leurs éléments ; validation sur poste réel. |
+| Export « dossier propre » | `guide.html`, `guide.md` et `images/etape-001.png` numérotées dans l'ordre du guide. | Faible. | — |
 | Masques dessinés avant l'enregistrement | Dessiner les zones sur un aperçu de la cible au lieu de saisir `x,y,largeur,hauteur`. | Moyen. | L'aperçu nécessite l'accès à la cible avant l'enregistrement. |
 
 ## À venir — capture plus fiable

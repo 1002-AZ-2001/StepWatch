@@ -65,6 +65,7 @@ STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 't
 10. Cliquez dans une fenêtre lancée en administrateur pendant l'enregistrement et consultez le journal pour détecter une éventuelle réinstallation du hook.
 11. Enregistrez un moniteur entier avec la barre flottante. Cliquez sur ses boutons : aucune étape ne doit apparaître. Sous Windows 10 2004+ et 11, la barre ne doit pas figurer dans les PNG (`SetWindowDisplayAffinity`). Déplacez-la au-dessus de la cible et vérifiez de nouveau.
 12. Dans l'onglet **Guide**, modifiez un titre, une description, l'ordre, supprimez une étape et masquez une zone. Vérifiez `rapport.html`, `rapport.md`, `captures/retirees/` et la suppression d'un rapport autonome existant.
+13. Pendant un enregistrement, utilisez Ctrl+Maj+F9, F10 et F11 depuis une autre application (Bloc-notes) : pause, note et arrêt doivent répondre, et aucune autre frappe ne doit apparaître dans le journal ni dans les rapports. Lancez StepWatch une seconde fois : un message doit l'empêcher.
 
 ## Validation sur un bureau Linux
 

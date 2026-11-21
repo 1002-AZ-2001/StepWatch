@@ -14,12 +14,15 @@ from tkinter import messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from .guide import RETIRED_FOLDER, redact_step, remove_step, save_guide
+from .guide import RETIRED_FOLDER, redact_step, remove_step, restore_step, save_guide
 from .imaging import preview_image
 from .storage import StorageError, capture_path, read_session, step_heading, step_trigger_label
 from .theme import PALETTE
 
 PAGE_SIZE = 48
+#: Edits that ``undo`` can revert (masking is permanent and never in the list).
+UNDO_LIMIT = 50
+_TEXT_WIDGETS = ("Entry", "TEntry", "Text", "TCombobox", "Spinbox")
 REVIEW_LIMIT = (1280, 800)
 #: Largest capture shown in the redaction window.
 REDACTION_LIMIT = (1100, 680)
@@ -138,6 +141,7 @@ class SessionReview(ttk.Frame):
         self._display_size = None
         self._editable = True
         self._filling = False
+        self._undo: list[tuple] = []
         self.guide_name = tk.StringVar()
         self.step_title_text = tk.StringVar()
 
@@ -207,6 +211,8 @@ class SessionReview(ttk.Frame):
         self.step_kind.grid(row=0, column=1, sticky="w", padx=(8, 0))
         tools = ttk.Frame(top, style="Card.TFrame")
         tools.grid(row=0, column=3, sticky="e")
+        self.undo_button = ttk.Button(tools, text="↶ Annuler", style="Icon.TButton", command=self.undo)
+        self.undo_button.pack(side="left", padx=(4, 8))
         self.up_button = ttk.Button(tools, text="↑", width=3, style="Icon.TButton", command=lambda: self._move(-1))
         self.down_button = ttk.Button(tools, text="↓", width=3, style="Icon.TButton", command=lambda: self._move(1))
         self.redact_button = ttk.Button(tools, text="Masquer une zone…", style="Icon.TButton", command=self._redact)
@@ -235,6 +241,11 @@ class SessionReview(ttk.Frame):
         self.annotation.bind("<FocusOut>", self._commit_step)
         self._show_page(0)
         self._update_tools()
+        # Raccourcis de l'éditeur, actifs seulement quand l'onglet Guide est visible.
+        for sequence, action in (("<Delete>", self._delete), ("<Control-Up>", lambda: self._move(-1)),
+                                 ("<Control-Down>", lambda: self._move(1)), ("<Control-z>", self.undo),
+                                 ("<Control-Z>", self.undo), ("<F2>", self._focus_title)):
+            self.bind_all(sequence, lambda event, action=action: self._shortcut(event, action), add="+")
 
     # ----- Chargement asynchrone -------------------------------------------------
 
@@ -270,6 +281,7 @@ class SessionReview(ttk.Frame):
         self.name = ""
         self.steps = []
         self._selected = None
+        self._undo.clear()
         self.guide_name.set("")
         self.title.configure(text="Aucun guide ouvert")
         self._fill_step(None)
@@ -295,6 +307,7 @@ class SessionReview(ttk.Frame):
             else:
                 if kind == "session":
                     self.name, _, self.steps = result
+                    self._undo.clear()
                     self.directory = directory
                     self._selected = None
                     self.guide_name.set(self.name)
@@ -314,7 +327,8 @@ class SessionReview(ttk.Frame):
 
     def _update_count(self):
         count = len(self.steps)
-        self.title.configure(text=f"{count} étape{'s' if count > 1 else ''} · modifications enregistrées automatiquement")
+        self.title.configure(text=f"{count} étape{'s' if count > 1 else ''} · enregistrement automatique · "
+                                  "Suppr supprimer · Ctrl+↑/↓ déplacer · Ctrl+Z annuler · F2 titre")
 
     def _row_values(self, step):
         kind = step_trigger_label(step)
@@ -431,15 +445,23 @@ class SessionReview(ttk.Frame):
         self.down_button.configure(state="normal" if has_step and position < len(self.steps) - 1 else "disabled")
         for button in (self.redact_button, self.delete_button):
             button.configure(state="normal" if has_step else "disabled")
+        self.undo_button.configure(state="normal" if editable and self._undo else "disabled")
 
-    def _save(self, steps, select=None, message=None):
+    def _remember(self, entry):
+        self._undo.append(entry)
+        del self._undo[:-UNDO_LIMIT]
+
+    def _save(self, steps, select=None, message=None, undoable=True):
         """Write the guide, reload the canonical steps and keep the selection."""
+        before = ("save", self.name, [dict(step) for step in self.steps], self._position())
         try:
             deleted_standalone = save_guide(self.directory, self.guide_name.get(), steps)
             self.name, _, self.steps = read_session(self.directory)
         except (StorageError, OSError, ValueError) as exc:
             self._on_error(str(exc))
             return False
+        if undoable:
+            self._remember(before)
         self._after_change(deleted_standalone, select, message)
         return True
 
@@ -498,12 +520,16 @@ class SessionReview(ttk.Frame):
                 f"Sa capture est déplacée dans captures/{RETIRED_FOLDER}/ et n’apparaît plus dans les rapports.",
                 parent=self.winfo_toplevel()):
             return
+        before = [dict(item) for item in self.steps]
+        name = self.name
         try:
-            deleted_standalone = remove_step(self.directory, self.guide_name.get(), list(self.steps), position)
+            removal = remove_step(self.directory, self.guide_name.get(), list(self.steps), position)
             self.name, _, self.steps = read_session(self.directory)
         except (StorageError, OSError, ValueError) as exc:
             self._on_error(str(exc))
             return
+        deleted_standalone = removal.deleted_standalone
+        self._remember(("delete", name, before, position, removal.retired, step["image"]))
         if not self.steps:
             self._selected = None
             self._fill_step(None)
@@ -537,9 +563,52 @@ class SessionReview(ttk.Frame):
             self._on_error(str(exc))
             return
         self._after_change(deleted_standalone, position,
-                           f"Étape {step['index']} : {len(dialog.result)} zone(s) masquée(s) définitivement.")
+                           f"Étape {step['index']} : {len(dialog.result)} zone(s) masquée(s) définitivement "
+                           "(un masquage ne peut pas être annulé).")
         self._selected = None
         self._select_step(None)
+
+    def undo(self):
+        """Revert the last title, description, name, order or removal change."""
+        self._commit_step()
+        if not self._can_edit() or not self._undo:
+            return
+        entry = self._undo.pop()
+        kind, name, steps, position = entry[:4]
+        try:
+            if kind == "delete":
+                retired, image = entry[4], entry[5]
+                deleted_standalone = restore_step(self.directory, name, steps, retired, image)
+            else:
+                deleted_standalone = save_guide(self.directory, name, steps)
+            self.name, _, self.steps = read_session(self.directory)
+        except (StorageError, OSError, ValueError) as exc:
+            self._on_error(f"Annulation impossible : {exc}")
+            self._update_tools()
+            return
+        select = position if position is not None and position < len(self.steps) else None
+        self._selected = None
+        self._after_change(deleted_standalone, select,
+                           "Étape restaurée." if kind == "delete" else "Dernière modification annulée.")
+        if select is not None:
+            self._fill_step(self.steps[select])
+
+    def _focus_title(self):
+        if str(self.title_entry["state"]) == "normal":
+            self.title_entry.focus_set()
+            self.title_entry.select_range(0, "end")
+
+    def _shortcut(self, event, action):
+        """Run an editor shortcut unless the Guide tab is hidden or the user is typing."""
+        if not self.winfo_ismapped() or not self._can_edit():
+            return None
+        focused = self.focus_get()
+        if focused is not None and focused.winfo_class() in _TEXT_WIDGETS and event.keysym != "F2":
+            return None  # Delete, Ctrl+Z and Ctrl+arrows keep their text meaning.
+        if focused is not None and focused.winfo_toplevel() is not self.winfo_toplevel():
+            return None  # Another window (dialog) has the focus.
+        action()
+        return "break"
 
     def shutdown(self, timeout=0):
         self._pending = None
