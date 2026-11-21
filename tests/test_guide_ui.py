@@ -9,11 +9,13 @@ import time
 import tkinter as tk
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from PIL import Image
 
 from stepwatch.guide import RETIRED_FOLDER
+from stepwatch.hotkeys import TK_SEQUENCES
 from stepwatch.models import CaptureTarget, Rect
 from stepwatch.storage import STANDALONE_REPORT, SessionStore, export_standalone, read_session
 from stepwatch.ui import StepWatchApp
@@ -174,38 +176,55 @@ class GuideInterfaceTests(unittest.TestCase):
         self.assertEqual([step["image"] for step in read_session(self.directory)[2]], images)
         self.assertEqual(str(review.undo_button["state"]), "disabled")
 
+    def press(self, widget, sequence, keysym, handler, focused=None):
+        """Send a shortcut like the keyboard would.
+
+        Tk delivers generated key events only to the window holding the
+        keyboard focus. X11 (Xvfb) grants it; a Windows CI runner does not
+        bring the test window to the foreground, and Tk then drops the
+        event. Without focus, call the same bound handler with the focus the
+        user would have, after checking that the sequence is bound.
+        """
+        self.assertTrue(self.root.bind_all(sequence), f"{sequence} non lié")
+        widget.focus_force()
+        self.root.update()
+        if self.root.focus_get() is not None:
+            widget.event_generate(sequence)
+        else:
+            with patch.object(self.app._review, "focus_get", return_value=focused or widget):
+                handler(SimpleNamespace(keysym=keysym, widget=widget))
+        self.root.update()
+
+    def editor_key(self, widget, sequence, keysym):
+        review = self.app._review
+        self.press(widget, sequence, keysym,
+                   lambda event: review._shortcut(event, review.shortcuts[sequence]))
+
     def test_keyboard_shortcuts_act_on_the_selected_step(self):
         review = self.open_guide()
         images = [step["image"] for step in review.steps]
         self.app._tabs.select(review)  # Shortcuts only act when the Guide tab is shown.
         self.select(review, 0)
-        review.list.focus_set()
-        self.root.update()
-        review.list.event_generate("<Control-Down>")
+        self.editor_key(review.list, "<Control-Down>", "Down")
         self.pump(lambda: review._selected == "1" and not review.busy)
         self.assertEqual(read_session(self.directory)[2][1]["image"], images[0])
-        review.list.event_generate("<Control-z>")
+        self.editor_key(review.list, "<Control-z>", "z")
         self.pump(lambda: read_session(self.directory)[2][0]["image"] == images[0]
                   and review._selected is not None and not review.busy)
         with patch("stepwatch.review.messagebox.askyesno", return_value=True) as asked:
-            review.list.event_generate("<Delete>")
-            self.root.update()
+            self.editor_key(review.list, "<Delete>", "Delete")
         asked.assert_called_once()
         self.assertEqual(len(read_session(self.directory)[2]), 2)
         # While typing, Delete and Ctrl+Z keep their text meaning.
         self.select(review, 0)
-        review.title_entry.focus_set()
-        self.root.update()
         with patch("stepwatch.review.messagebox.askyesno") as asked:
-            review.title_entry.event_generate("<Delete>")
-            self.root.update()
+            self.editor_key(review.title_entry, "<Delete>", "Delete")
         asked.assert_not_called()
         # Hidden Guide tab: the shortcut does nothing.
         self.app._tabs.select(0)
         self.root.update()
         with patch("stepwatch.review.messagebox.askyesno") as asked:
-            self.root.event_generate("<Delete>")
-            self.root.update()
+            self.editor_key(review.list, "<Delete>", "Delete")
         asked.assert_not_called()
 
     def test_editing_is_disabled_while_recording(self):
@@ -249,13 +268,18 @@ class GuideInterfaceTests(unittest.TestCase):
         self.app._recorder = recorder
         self.app._compact_session = False
         self.pump()
-        self.root.event_generate("<Control-Shift-F9>")
+        actions = {sequence: name for name, sequence in TK_SEQUENCES.items()}
+
+        def key(sequence):
+            self.press(self.root, sequence, sequence, lambda _event: self.app._hotkey(actions[sequence]))
+
+        key("<Control-Shift-F9>")
         self.assertEqual(recorder.state, "paused")
-        self.root.event_generate("<Control-Shift-F9>")
+        key("<Control-Shift-F9>")
         self.assertEqual(recorder.state, "recording")
-        self.root.event_generate("<Control-Shift-F11>")
+        key("<Control-Shift-F11>")
         self.assertEqual(recorder.state, "stopped")
-        self.root.event_generate("<Control-Shift-F9>")  # Inactive once stopped.
+        key("<Control-Shift-F9>")  # Inactive once stopped.
         self.assertEqual(recorder.state, "stopped")
 
     def test_recent_guides_menu_opens_a_guide(self):

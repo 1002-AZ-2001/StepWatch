@@ -242,9 +242,10 @@ class SessionReview(ttk.Frame):
         self._show_page(0)
         self._update_tools()
         # Raccourcis de l'éditeur, actifs seulement quand l'onglet Guide est visible.
-        for sequence, action in (("<Delete>", self._delete), ("<Control-Up>", lambda: self._move(-1)),
-                                 ("<Control-Down>", lambda: self._move(1)), ("<Control-z>", self.undo),
-                                 ("<Control-Z>", self.undo), ("<F2>", self._focus_title)):
+        self.shortcuts = {"<Delete>": self._delete, "<Control-Up>": lambda: self._move(-1),
+                          "<Control-Down>": lambda: self._move(1), "<Control-z>": self.undo,
+                          "<Control-Z>": self.undo, "<F2>": self._focus_title}
+        for sequence, action in self.shortcuts.items():
             self.bind_all(sequence, lambda event, action=action: self._shortcut(event, action), add="+")
 
     # ----- Chargement asynchrone -------------------------------------------------
