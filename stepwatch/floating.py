@@ -73,12 +73,12 @@ class FloatingBar(tk.Toplevel):
             widget.bind("<B1-Motion>", self._drag)
         self._origin = (0, 0)
 
-    def show(self) -> None:
-        """Bottom centre of the screen, above a typical task bar."""
+    def show(self, position: str = "bas") -> None:
+        """Centre of the screen, at the bottom (above a typical task bar) or at the top."""
         self.update_idletasks()
         width, height = self.winfo_reqwidth(), self.winfo_reqheight()
         x = max(0, (self.winfo_screenwidth() - width) // 2)
-        y = max(0, self.winfo_screenheight() - height - 72)
+        y = 24 if position == "haut" else max(0, self.winfo_screenheight() - height - 72)
         self.geometry(f"+{x}+{y}")
         self.deiconify()
         self.lift()

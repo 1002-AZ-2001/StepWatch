@@ -114,9 +114,34 @@ Après une modification, un rapport autonome déjà créé contient l'ancienne v
 
 Sous Windows, les trois raccourcis d'enregistrement fonctionnent dans toutes les applications : StepWatch les réserve avec `RegisterHotKey`, qui ne signale que ces combinaisons ; aucune autre frappe n'est observée. Si une autre application utilise déjà une combinaison, le journal l'indique. Sous Linux, ils fonctionnent quand une fenêtre de StepWatch a le focus. Dans un champ de texte, Suppr, Ctrl+Z et Ctrl+flèches gardent leur sens habituel.
 
-## Préférences
+## Menus et paramètres
 
-StepWatch retient d'un lancement à l'autre le dossier des guides, la cible, le mode, les réglages avancés, les masques, la barre flottante, la taille de la fenêtre et les guides récents. Le fichier `settings.json` reste sur le poste : `%APPDATA%\StepWatch` sous Windows, `~/.config/stepwatch` sous Linux. Supprimez-le pour revenir aux réglages par défaut. Une seule fenêtre StepWatch peut être ouverte à la fois : un second lancement affiche un message et s'arrête.
+![Menu Fichier](docs/menu.png)
+
+| Menu | Contenu |
+| --- | --- |
+| **Fichier** | Ouvrir un guide (Ctrl+O), guides récents, importer ShareX (Ctrl+I), exporter le rapport autonome (Ctrl+E) ou le Markdown, ouvrir le dossier du guide, **Paramètres…** (Ctrl+,), quitter (Ctrl+Q). |
+| **Enregistrement** | Démarrer (Ctrl+R), pause/reprise, note, arrêt, actualiser les cibles (F5), barre flottante. |
+| **Guide** | Annuler, modifier le titre, monter, descendre, masquer une zone, supprimer l'étape. |
+| **Affichage** | Onglets Enregistrer, Guide et Journal (Ctrl+1, 2, 3), réglages avancés. |
+| **Aide** | Raccourcis clavier (F1), documentation en ligne, signaler un problème, dossiers du journal et des paramètres, vérifier l'installation, à propos. |
+
+Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) sont grisées. La documentation en ligne et le signalement d'un problème ouvrent votre navigateur sur GitHub ; StepWatch lui-même n'envoie rien.
+
+![Fenêtre Paramètres, onglet Guide et rapports](docs/parametres.png)
+
+**Fichier › Paramètres…** regroupe :
+
+| Onglet | Paramètres |
+| --- | --- |
+| Général | Nom proposé pour un nouveau guide, avec `{date}` et `{heure}` (par exemple « Poste {date} ») ; dossier des guides. |
+| Enregistrement | Barre flottante et sa position (en bas ou en haut de l'écran) ; raccourcis globaux sous Windows ; signal sonore à chaque étape. |
+| Guide et rapports | Ouvrir l'onglet Guide à l'arrêt ; créer le rapport autonome automatiquement à l'arrêt ; confirmer une suppression ; conserver ou effacer la capture d'une étape supprimée. |
+| Interface | Taille du texte (90 à 130 %, au prochain lancement) ; réglages avancés ouverts au démarrage. |
+
+**Réinitialiser** revient aux valeurs par défaut en gardant la liste des guides récents. Si vous choisissez d'effacer la capture d'une étape supprimée, StepWatch demande toujours confirmation, et cette suppression ne peut pas être annulée.
+
+StepWatch retient aussi d'un lancement à l'autre la cible, le mode, les réglages avancés, les masques, la taille de la fenêtre et les guides récents. Le fichier `settings.json` reste sur le poste : `%APPDATA%\StepWatch` sous Windows, `~/.config/stepwatch` sous Linux. Supprimez-le pour revenir aux réglages par défaut. Une seule fenêtre StepWatch peut être ouverte à la fois : un second lancement affiche un message et s'arrête.
 
 ## Captures et rapports
 

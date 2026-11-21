@@ -4,6 +4,30 @@
 
 Rien pour l'instant.
 
+## 0.9.0 — 2026-11-21
+
+Barre de menus et fenêtre Paramètres.
+
+- **Barre de menus**, inspirée de MusicScope :
+  - **Fichier** : ouvrir un guide, guides récents, import ShareX, exports, Paramètres, quitter ;
+  - **Enregistrement** : démarrer, pause, note, arrêt, actualiser les cibles, barre flottante ;
+  - **Guide** : annuler, titre, monter, descendre, masquer, supprimer ;
+  - **Affichage** : onglets, réglages avancés ;
+  - **Aide** : raccourcis, documentation en ligne, signaler un problème, dossiers du journal et des paramètres, vérifier l'installation, à propos.
+  Les entrées indisponibles sont grisées. Nouveaux raccourcis : Ctrl+O, Ctrl+I, Ctrl+E, Ctrl+R, Ctrl+1/2/3, F5, F1, Ctrl+, et Ctrl+Q ; ils sont ignorés dans une zone de texte, où ils ont un sens d'édition.
+- **Paramètres…** (Ctrl+,), en quatre onglets :
+  - nom proposé pour un nouveau guide, avec `{date}` et `{heure}` ;
+  - position de la barre flottante (en bas ou en haut) ;
+  - raccourcis globaux activables ;
+  - signal sonore à chaque étape ;
+  - onglet Guide et rapport autonome automatiques à l'arrêt ;
+  - confirmation de suppression ;
+  - conservation ou effacement de la capture d'une étape supprimée : l'effacement est toujours confirmé et ne s'annule pas ;
+  - taille du texte de 90 à 130 % ;
+  - réglages avancés ouverts au démarrage.
+  **Réinitialiser** garde la liste des guides récents.
+- **Vérifier l'installation** (menu Aide) lance l'auto-test des images, rapports et import, sans réseau.
+
 ## 0.8.0 — 2026-11-21
 
 Confort d'utilisation : StepWatch se souvient de vos réglages, se pilote au clavier et permet de revenir sur une modification du guide.

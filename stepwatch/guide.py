@@ -83,19 +83,27 @@ def save_guide(directory: Path, name: str, steps: list[dict[str, Any]], *,
 
 class Removal(NamedTuple):
     deleted_standalone: bool
-    retired: Path  # Where the capture now is, for restore_step().
+    retired: Path | None  # Where the capture now is, for restore_step(); None if deleted.
 
 
-def remove_step(directory: Path, name: str, steps: list[dict[str, Any]], position: int) -> Removal:
+def remove_step(directory: Path, name: str, steps: list[dict[str, Any]], position: int,
+                keep: bool = True) -> Removal:
     """Remove ``steps[position]`` from the guide; its PNG moves to captures/retirees/.
 
-    The guide is saved first: if moving the PNG then fails, the capture only
-    stays unreferenced in captures/.
+    With ``keep=False`` (Paramètres › Guide), the PNG is deleted instead and
+    the removal cannot be undone. The guide is saved first: if handling the
+    PNG then fails, the capture only stays unreferenced in captures/.
     """
     removed = steps[position]
     source = capture_path(Path(directory), removed)
     remaining = steps[:position] + steps[position + 1:]
     deleted_standalone = save_guide(directory, name, remaining)
+    if not keep:
+        try:
+            source.unlink()
+        except OSError as exc:
+            raise StorageError(f"Étape retirée du guide, mais capture non supprimée ({source.name}) : {exc}") from exc
+        return Removal(deleted_standalone, None)
     retired = source.parent / RETIRED_FOLDER
     try:
         retired.mkdir(mode=0o700, exist_ok=True)

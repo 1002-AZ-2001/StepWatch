@@ -128,6 +128,12 @@ If an antivirus or a sync tool briefly locks a file, the write is retried. If th
 - Windows can silently remove a slow low-level mouse hook. StepWatch detects this through the physical button state, reinstalls the hook and reports it ("des clics ont pu manquer", clicks may have been missed): check the latest steps.
 - The visual comparison ignores small variations, without a guarantee for every animation. A change shorter than the interval can go unnoticed.
 
+## Menus and settings
+
+The menu bar offers **Fichier** (File: open, recent guides, ShareX import, exports, **Paramètres…** settings, quit), **Enregistrement** (Recording: start Ctrl+R, pause, note, stop, refresh targets F5), **Guide** (undo, title, move, black out, remove), **Affichage** (View: tabs Ctrl+1/2/3, advanced settings) and **Aide** (Help: shortcuts F1, online documentation, report a problem, log and settings folders, installation check, about). Unavailable entries are greyed out.
+
+**Paramètres…** (Ctrl+,) sets: the suggested guide name with `{date}` and `{heure}` (time) placeholders, the guides folder, the floating bar and its position (bottom or top), Windows global shortcuts, a sound on each step, opening the Guide tab after stopping, an automatic standalone report after stopping, delete confirmation, keeping or erasing the screenshot of a removed step (erasing cannot be undone and is always confirmed), text size (next launch) and advanced settings shown at startup. **Réinitialiser** (Reset) restores the defaults and keeps recent guides.
+
 ## Keyboard shortcuts, preferences
 
 | Shortcut | Action |

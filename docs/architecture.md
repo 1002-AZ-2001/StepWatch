@@ -20,6 +20,7 @@ StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en fra
 | `floating.py` | Barre flottante pendant l'enregistrement : état, nombre d'étapes, pause, note, arrêt, retour à la fenêtre. |
 | `theme.py` | Palette, styles ttk (thème « clam ») et icône StepWatch dessinée avec Pillow. |
 | `settings.py` | Préférences locales (`settings.json`) : lues au lancement, écrites au démarrage d'un enregistrement et à la fermeture ; un fichier absent ou invalide donne les valeurs par défaut. |
+| `settings_dialog.py` | Fenêtre Paramètres : onglets Général, Enregistrement, Guide et rapports, Interface ; travaille sur une copie des préférences. |
 | `library.py` | Guides récents : dossiers déjà ouverts et interventions du dossier des guides, les plus récents d'abord. |
 | `hotkeys.py` | Raccourcis d'enregistrement Windows (`RegisterHotKey`) sur un thread doté de sa propre boucle de messages ; les actions passent à l'interface par une file. |
 | `instance.py` | Instance unique : mutex nommé sous Windows, `flock` sous Linux ; libérés par le système à la fin du processus. |

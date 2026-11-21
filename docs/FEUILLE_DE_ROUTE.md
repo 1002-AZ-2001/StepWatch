@@ -2,6 +2,10 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 0.9 — menus et paramètres
+
+Barre de menus (Fichier, Enregistrement, Guide, Affichage, Aide) avec raccourcis et entrées grisées selon le contexte, inspirée de MusicScope ; fenêtre **Paramètres** : nom de guide avec date et heure, position de la barre flottante, raccourcis globaux, signal sonore, onglet Guide et rapport autonome à l'arrêt, confirmation et conservation des captures supprimées, taille du texte.
+
 ## Version 0.8 — confort d'utilisation
 
 Préférences retenues entre deux lancements, raccourcis clavier (globaux sous Windows pendant l'enregistrement), annulation dans l'éditeur (suppression comprise), guides récents et instance unique. Tout est vérifié par la CI ; les raccourcis globaux et le verrou Windows sont aussi appelés par le test de fumée Windows.

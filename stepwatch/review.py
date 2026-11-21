@@ -121,13 +121,15 @@ class SessionReview(ttk.Frame):
     """Guide editor: indexed step list, one capture and editable texts."""
 
     def __init__(self, parent, *, choose_session, on_loaded, on_error, font,
-                 on_changed=None, export=None):
+                 on_changed=None, export=None, options=None):
         super().__init__(parent, padding=(0, 12, 0, 0))
         p = PALETTE
         self._font = font
         self._on_loaded, self._on_error = on_loaded, on_error
         self._on_changed = on_changed or (lambda _message: None)
         self._export = export
+        # Préférences de l'application (confirmation, conservation des captures).
+        self._app_options = options or (lambda: {"confirm_delete": True, "keep_retired": True})
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="StepWatch-relecture")
         self._running = None
         self._pending = None
@@ -515,29 +517,34 @@ class SessionReview(ttk.Frame):
         if not self._can_edit() or position is None:
             return
         step = self.steps[position]
-        if not messagebox.askyesno(
+        options = self._app_options()
+        keep = options.get("keep_retired", True)
+        fate = (f"Sa capture est déplacée dans captures/{RETIRED_FOLDER}/ et n’apparaît plus dans les rapports."
+                if keep else "Sa capture est supprimée définitivement : cette suppression ne pourra pas être annulée.")
+        if (options.get("confirm_delete", True) or not keep) and not messagebox.askyesno(
                 "Supprimer l’étape",
-                f"Retirer l’étape {step['index']} (« {step_heading(step)} ») du guide ?\n\n"
-                f"Sa capture est déplacée dans captures/{RETIRED_FOLDER}/ et n’apparaît plus dans les rapports.",
+                f"Retirer l’étape {step['index']} (« {step_heading(step)} ») du guide ?\n\n{fate}",
                 parent=self.winfo_toplevel()):
             return
         before = [dict(item) for item in self.steps]
         name = self.name
         try:
-            removal = remove_step(self.directory, self.guide_name.get(), list(self.steps), position)
+            removal = remove_step(self.directory, self.guide_name.get(), list(self.steps), position, keep=keep)
             self.name, _, self.steps = read_session(self.directory)
         except (StorageError, OSError, ValueError) as exc:
             self._on_error(str(exc))
             return
         deleted_standalone = removal.deleted_standalone
-        self._remember(("delete", name, before, position, removal.retired, step["image"]))
+        if removal.retired is not None:
+            self._remember(("delete", name, before, position, removal.retired, step["image"]))
         if not self.steps:
             self._selected = None
             self._fill_step(None)
             self._clear_image("Ce guide ne contient plus aucune étape.")
             self._show_page(0)
         self._after_change(deleted_standalone, min(position, len(self.steps) - 1) if self.steps else None,
-                           f"Étape {step['index']} retirée du guide (capture conservée dans captures/{RETIRED_FOLDER}/).")
+                           f"Étape {step['index']} retirée du guide (capture conservée dans captures/{RETIRED_FOLDER}/)."
+                           if keep else f"Étape {step['index']} supprimée avec sa capture.")
 
     def _redact(self):
         self._commit_step()
