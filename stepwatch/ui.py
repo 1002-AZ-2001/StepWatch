@@ -26,10 +26,17 @@ from .platform import capture_backend_factory, exclude_from_capture
 from .review import SessionReview
 from .storage import SessionStore, export_markdown, export_standalone, import_sharex
 from .library import recent_guides
-from .settings import Preferences
+from .settings import Preferences, default_path as settings_path, expand_name
+from .settings_dialog import SettingsDialog
 from .theme import PALETTE, STATUS_COLOURS, apply_theme, pick_fonts, render_icon
 
 LOGGER = logging.getLogger(__name__)
+DOCUMENTATION_URL = "https://github.com/1002-AZ-2001/StepWatch#readme"
+ISSUES_URL = "https://github.com/1002-AZ-2001/StepWatch/issues"
+#: Préférences modifiables dans la fenêtre Paramètres.
+SETTINGS_KEYS = ("name_template", "output", "compact", "bar_position", "global_hotkeys", "sound",
+                 "open_guide_after_stop", "auto_standalone", "confirm_delete", "keep_retired",
+                 "font_scale", "advanced_open")
 
 
 class StepWatchApp:
@@ -57,7 +64,7 @@ class StepWatchApp:
                  preferences: Preferences | None = None) -> None:
         self.root = root
         # Sans préférences (tests, auto-test), rien n'est lu ni écrit sur disque.
-        self._prefs = preferences
+        self._prefs = preferences if preferences is not None else Preferences.memory()
         self._ui_thread = threading.get_ident()
         self._disposed = False
         # Sans console (exécutable --windowed), Tk écrirait ces erreurs sur
@@ -66,6 +73,10 @@ class StepWatchApp:
         self.root.title("StepWatch — Documentation d’intervention")
         # Tk met les polices (en points) à l’échelle du DPI, pas les tailles en
         # pixels : sans ce facteur, à 150 % les réglages sont tronqués.
+        font_scale = self._prefs.values["font_scale"]
+        if font_scale != 100:
+            # Taille du texte (Paramètres › Interface) : agrandit polices et marges ensemble.
+            self.root.tk.call("tk", "scaling", float(self.root.tk.call("tk", "scaling")) * font_scale / 100)
         self._scale = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
         self._fit_to_screen()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
@@ -116,6 +127,7 @@ class StepWatchApp:
         self._style()
         self._build()
         self._apply_preferences()
+        self._build_menu()
         # Mêmes combinaisons que les raccourcis globaux, dans les fenêtres de StepWatch.
         for action, sequence in TK_SEQUENCES.items():
             self.root.bind_all(sequence, lambda _event, action=action: self._hotkey(action), add="+")
@@ -328,7 +340,8 @@ class StepWatchApp:
 
         self._review = SessionReview(self._tabs, choose_session=self._choose_session,
                                      on_loaded=self._use_session, on_error=self._review_error, font=self._ui_font,
-                                     on_changed=self._guide_changed, export=self._export_from_guide)
+                                     on_changed=self._guide_changed, export=self._export_from_guide,
+                                     options=lambda: self._prefs.values)
         self._tabs.add(self._review, text="Guide")
         self._tabs.bind("<<NotebookTabChanged>>", self._tab_changed)
 
@@ -361,7 +374,9 @@ class StepWatchApp:
         self._set_status_colours("idle")
 
     def _toggle_advanced(self) -> None:
-        opened = not self._advanced_open.get()
+        self._show_advanced(not self._advanced_open.get())
+
+    def _show_advanced(self, opened: bool) -> None:
         self._advanced_open.set(opened)
         self._advanced.grid() if opened else self._advanced.grid_remove()
         self.advanced_button.configure(text=("▾" if opened else "▸") + "  Réglages avancés")
@@ -465,13 +480,13 @@ class StepWatchApp:
             self._review.load(Path(selected))
             self._update_controls()
 
-    def _fill_recent_menu(self) -> None:
+    def _fill_recent_menu(self, menu: tk.Menu | None = None) -> None:
         """Guides récents : dossiers déjà ouverts et interventions du dossier des guides."""
         from datetime import datetime
 
-        menu = self._recent_menu
+        menu = self._recent_menu if menu is None else menu
         menu.delete(0, "end")
-        remembered = self._prefs.values["recent"] if self._prefs is not None else ()
+        remembered = self._prefs.values["recent"]
         entries = recent_guides(self.output.get().strip() or None, remembered)
         if entries:
             menu.add_command(label="Guides récents", state="disabled")
@@ -492,16 +507,14 @@ class StepWatchApp:
     def _use_session(self, directory: Path) -> None:
         self._session_dir = directory
         self.session_text.set(str(directory))
-        if self._prefs is not None:
-            self._prefs.remember_guide(directory)
-            self._prefs.save()
+        self._prefs.remember_guide(directory)
+        self._prefs.save()
 
     # ----- Préférences ----------------------------------------------------------
 
     def _apply_preferences(self) -> None:
-        if self._prefs is None:
-            return
         values = self._prefs.values
+        self.name.set(expand_name(values["name_template"]))
         for variable, key in ((self.output, "output"), (self.interval, "interval"),
                               (self.delay, "delay"), (self.sensitivity, "sensitivity")):
             if values[key]:
@@ -528,8 +541,6 @@ class StepWatchApp:
                 self.root.geometry(geometry)
 
     def _store_preferences(self) -> None:
-        if self._prefs is None:
-            return
         values = self._prefs.values
         values.update(output=self.output.get(), interval=self.interval.get(), delay=self.delay.get(),
                       sensitivity=self.sensitivity.get(), conservative=self.conservative.get(),
@@ -723,6 +734,24 @@ class StepWatchApp:
         except Exception as exc:
             self._write_log(f"Note non ajoutée : {exc}")
 
+    def _after_recording_stopped(self) -> None:
+        values = self._prefs.values
+        if values["open_guide_after_stop"]:
+            self._show_review()
+        # Nom proposé pour le prochain guide (Paramètres › Général).
+        self.name.set(expand_name(values["name_template"]))
+        if values["auto_standalone"]:
+            self._export_when_idle(attempts=100)
+
+    def _export_when_idle(self, attempts: int) -> None:
+        """Rapport autonome automatique, dès que la relecture du guide est terminée."""
+        if self._closing or self._disposed or attempts <= 0:
+            return
+        if self._background_running() or self._session_dir is None:
+            self.root.after(100, lambda: self._export_when_idle(attempts - 1))
+            return
+        self._export_standalone()
+
     def _background_running(self) -> bool:
         return self._review.busy or any(thread is not None and thread.is_alive()
                                         for thread in (self._import_thread, self._export_thread))
@@ -733,7 +762,7 @@ class StepWatchApp:
         busy = self._closing or self._background_running()
         if (self._last_state in self.ACTIVE_STATES and state == "stopped"
                 and not self._closing):
-            self._show_review()
+            self._after_recording_stopped()
             busy = self._background_running()
         self._last_state = state
         key = state, busy, self._closing, self._session_dir, self.source.get()
@@ -792,6 +821,8 @@ class StepWatchApp:
         if event.get("type") == "saved" and event.get("image") is not None:
             self._last_image = event["image"]
             self._draw_preview()
+            if self._prefs.values["sound"]:
+                self.root.bell()
         message = event.get("message", "")
         if message:
             if event.get("type") == "ignored" and message.startswith("Variation visuelle ignorée"):
@@ -811,6 +842,11 @@ class StepWatchApp:
                             "toutes les captures : protégez-le comme le dossier de l’intervention.")
             if event.get("markdown"):
                 self._write_log(f"Rapport Markdown : {event['markdown']} (liens vers captures/).")
+        elif event["type"] == "selfcheck":
+            self._write_log(event["message"])
+            if not self._closing:
+                (messagebox.showinfo if event["ok"] else messagebox.showerror)(
+                    "Vérifier l’installation", event["message"], parent=self.root)
         elif event["type"] == "error":
             self._write_log(event["message"], level=logging.WARNING)
             if not self._closing:
@@ -868,6 +904,235 @@ class StepWatchApp:
                 delay = 100 if self._closing or self._active() or self._background_running() else 300
                 self._poll_id = self.root.after(delay, self._poll)
 
+    # ----- Barre de menus --------------------------------------------------------
+
+    def _build_menu(self) -> None:
+        """Fichier, Enregistrement, Guide, Affichage, Aide, avec leurs raccourcis."""
+        p = PALETTE
+        options = {"tearoff": False, "font": (self._ui_font, 10), "bg": p["surface"], "fg": p["text"],
+                   "activebackground": p["accent_soft"], "activeforeground": p["accent_text"],
+                   "disabledforeground": p["disabled_text"], "relief": "flat", "bd": 1}
+        self.menubar = tk.Menu(self.root, **options)
+        self.menus: dict[str, tk.Menu] = {}
+        review = self._review
+
+        def guide(action):
+            def run():
+                self._tabs.select(review)
+                action()
+            return run
+
+        structure = {
+            "Fichier": [
+                ("Ouvrir un guide…", "Ctrl+O", "<Control-o>", self._choose_session),
+                ("Guides récents", None, None, "recent"),
+                ("Importer un dossier ShareX…", "Ctrl+I", "<Control-i>", self._import),
+                None,
+                ("Exporter le rapport autonome", "Ctrl+E", "<Control-e>", self._export_standalone),
+                ("Exporter en Markdown", None, None, lambda: self._export_from_guide("markdown")),
+                ("Ouvrir le dossier du guide", None, None, self._open_session),
+                None,
+                ("Paramètres…", "Ctrl+,", "<Control-comma>", self._open_settings),
+                None,
+                ("Quitter", "Ctrl+Q", "<Control-q>", self._close),
+            ],
+            "Enregistrement": [
+                ("Démarrer l’enregistrement", "Ctrl+R", "<Control-r>", self._start),
+                ("Pause / Reprendre", "Ctrl+Maj+F9", None, lambda: self._hotkey("pause")),
+                ("Ajouter une note…", "Ctrl+Maj+F10", None, lambda: self._hotkey("note")),
+                ("Arrêter", "Ctrl+Maj+F11", None, lambda: self._hotkey("stop")),
+                None,
+                ("Actualiser les cibles", "F5", "<F5>", self._refresh_targets),
+                ("check", "Barre flottante pendant l’enregistrement", self.compact, None),
+            ],
+            "Guide": [
+                ("Annuler", "Ctrl+Z", None, guide(review.undo)),
+                None,
+                ("Modifier le titre de l’étape", "F2", None, guide(review._focus_title)),
+                ("Monter l’étape", "Ctrl+↑", None, guide(lambda: review._move(-1))),
+                ("Descendre l’étape", "Ctrl+↓", None, guide(lambda: review._move(1))),
+                ("Masquer une zone…", None, None, guide(review._redact)),
+                ("Supprimer l’étape", "Suppr", None, guide(review._delete)),
+            ],
+            "Affichage": [
+                ("Onglet Enregistrer", "Ctrl+1", "<Control-Key-1>", lambda: self._tabs.select(0)),
+                ("Onglet Guide", "Ctrl+2", "<Control-Key-2>", self._show_guide_tab),
+                ("Onglet Journal", "Ctrl+3", "<Control-Key-3>", lambda: self._tabs.select(2)),
+                None,
+                ("check", "Réglages avancés", self._advanced_open,
+                 lambda: self._show_advanced(self._advanced_open.get())),
+            ],
+            "Aide": [
+                ("Raccourcis clavier", "F1", "<F1>", self._show_shortcuts),
+                ("Documentation en ligne", None, None, lambda: self._open_url(DOCUMENTATION_URL)),
+                ("Signaler un problème", None, None, lambda: self._open_url(ISSUES_URL)),
+                None,
+                ("Ouvrir le dossier du journal", None, None, self._open_log_folder),
+                ("Ouvrir le dossier des paramètres", None, None,
+                 lambda: self._open_path(settings_path().parent)),
+                ("Vérifier l’installation", None, None, self._check_installation),
+                None,
+                ("À propos de StepWatch", None, None, self._show_about),
+            ],
+        }
+        for title, entries in structure.items():
+            menu = tk.Menu(self.menubar, postcommand=self._refresh_menus, **options)
+            self.menus[title] = menu
+            self.menubar.add_cascade(label=title, menu=menu)
+            for entry in entries:
+                if entry is None:
+                    menu.add_separator()
+                elif entry[0] == "check":
+                    _, label, variable, command = entry
+                    menu.add_checkbutton(label=label, variable=variable, command=command)
+                elif entry[3] == "recent":
+                    recent = tk.Menu(menu, **options)
+                    recent.configure(postcommand=lambda recent=recent: self._fill_recent_menu(recent))
+                    menu.add_cascade(label=entry[0], menu=recent)
+                else:
+                    label, accelerator, sequence, command = entry
+                    menu.add_command(label=label, accelerator=accelerator or "", command=command)
+                    if sequence:
+                        self.root.bind_all(sequence, lambda _event, command=command: self._menu_shortcut(command),
+                                           add="+")
+        self.root.configure(menu=self.menubar)
+
+    def _menu_shortcut(self, command):
+        """Raccourci d’un menu : ignoré pendant la fermeture ou dans une autre fenêtre (dialogue)."""
+        focused = self.root.focus_get()
+        if self._closing or (focused is not None and focused.winfo_toplevel() is not self.root):
+            return None
+        if focused is not None and focused.winfo_class() == "Text":
+            return None  # Ctrl+O, Ctrl+I, Ctrl+E… ont un sens d’édition dans une zone de texte.
+        command()
+        return "break"
+
+    def _show_guide_tab(self) -> None:
+        self._tabs.select(self._review)
+        self._show_review()
+
+    def _refresh_menus(self) -> None:
+        """États des entrées au moment où un menu s’ouvre."""
+        state = self._recorder.state if self._recorder is not None else "idle"
+        active = state in self.ACTIVE_STATES
+        busy = self._closing or self._background_running()
+        recording = state in {"recording", "paused"} and not self._closing
+        review = self._review
+        position = review._position()
+        has_step = review._can_edit() and position is not None and position < len(review.steps)
+
+        def set_state(menu, label, enabled):
+            self.menus[menu].entryconfigure(label, state="normal" if enabled else "disabled")
+
+        for label in ("Ouvrir un guide…", "Importer un dossier ShareX…"):
+            set_state("Fichier", label, not active and not busy)
+        for label in ("Exporter le rapport autonome", "Exporter en Markdown"):
+            set_state("Fichier", label, self._session_dir is not None and not active and not busy)
+        set_state("Fichier", "Ouvrir le dossier du guide", self._session_dir is not None)
+        set_state("Enregistrement", "Démarrer l’enregistrement",
+                  not active and not busy and self._backend is not None)
+        for label in ("Pause / Reprendre", "Ajouter une note…", "Arrêter"):
+            set_state("Enregistrement", label, recording)
+        set_state("Enregistrement", "Actualiser les cibles",
+                  not active and self._backend is not None and not self._uses_portal)
+        set_state("Guide", "Annuler", review._can_edit() and bool(review._undo))
+        set_state("Guide", "Monter l’étape", has_step and position > 0)
+        set_state("Guide", "Descendre l’étape", has_step and position < len(review.steps) - 1)
+        for label in ("Modifier le titre de l’étape", "Masquer une zone…", "Supprimer l’étape"):
+            set_state("Guide", label, has_step)
+
+    # ----- Paramètres et aide --------------------------------------------------
+
+    def _open_settings(self) -> None:
+        if self._closing:
+            return
+        self._store_preferences()  # Les valeurs affichées reprennent l’état actuel.
+        dialog = SettingsDialog(self.root, dict(self._prefs.values), font=self._ui_font,
+                                on_apply=self._apply_settings, on_reset=self._reset_settings)
+        self._settings_dialog = dialog
+        dialog.grab_set()
+
+    def _apply_settings(self, values: dict) -> None:
+        old_scale = self._prefs.values["font_scale"]
+        for key in SETTINGS_KEYS:
+            if key in values:
+                self._prefs.values[key] = values[key]
+        prefs = self._prefs.values
+        self.output.set(prefs["output"])
+        self.compact.set(prefs["compact"])
+        if not self._active():
+            self.name.set(expand_name(prefs["name_template"]))
+        self._prefs.save()
+        message = "Paramètres enregistrés."
+        if prefs["font_scale"] != old_scale:
+            message += " La nouvelle taille du texte s’appliquera au prochain lancement."
+        self._write_log(message)
+
+    def _reset_settings(self) -> None:
+        self._prefs.reset()
+        self._apply_preferences()
+        self._prefs.save()
+        self._write_log("Paramètres réinitialisés (les guides récents sont conservés).")
+
+    def _open_url(self, url: str) -> None:
+        import webbrowser
+
+        if not webbrowser.open(url):
+            self._write_log(f"Navigateur indisponible : ouvrez {url}")
+
+    def _open_log_folder(self) -> None:
+        from .diagnostics import log_directory
+
+        self._open_path(log_directory())
+
+    def _check_installation(self) -> None:
+        """Auto-test des images, rapports et import, sans réseau ni données personnelles."""
+        def work() -> None:
+            import tempfile
+
+            from .selftest import check_reports
+            try:
+                with tempfile.TemporaryDirectory(prefix="stepwatch-verification-") as temporary:
+                    check_reports(Path(temporary))
+                event = {"type": "selfcheck", "ok": True,
+                         "message": "Installation vérifiée : images, masques, rapports, notes et import ShareX."}
+            except Exception as exc:
+                LOGGER.exception("Vérification de l’installation en échec")
+                event = {"type": "selfcheck", "ok": False, "message": f"Vérification en échec : {exc}"}
+            self._background_events.put(event)
+
+        threading.Thread(target=work, name="StepWatch-verification", daemon=True).start()
+        self._write_log("Vérification de l’installation en cours…")
+
+    def _show_shortcuts(self) -> None:
+        lines = [
+            ("Ctrl+R", "Démarrer l’enregistrement"),
+            ("Ctrl+Maj+F9", "Pause / Reprendre" + (" (dans toutes les applications)" if sys.platform == "win32" else "")),
+            ("Ctrl+Maj+F10", "Ajouter une note"),
+            ("Ctrl+Maj+F11", "Arrêter l’enregistrement"),
+            ("Ctrl+O / Ctrl+I", "Ouvrir un guide / Importer ShareX"),
+            ("Ctrl+E", "Exporter le rapport autonome"),
+            ("Ctrl+1, 2, 3", "Onglets Enregistrer, Guide, Journal"),
+            ("Suppr, Ctrl+↑/↓", "Supprimer, déplacer l’étape (onglet Guide)"),
+            ("Ctrl+Z, F2", "Annuler, modifier le titre de l’étape"),
+            ("F5", "Actualiser les cibles"),
+            ("Ctrl+,", "Paramètres"),
+            ("Ctrl+Q", "Quitter"),
+        ]
+        messagebox.showinfo("Raccourcis clavier", "\n".join(f"{keys}  —  {text}" for keys, text in lines),
+                            parent=self.root)
+
+    def _show_about(self) -> None:
+        from . import __version__
+
+        messagebox.showinfo(
+            "À propos de StepWatch",
+            f"StepWatch {__version__}\n\nDocumentation locale des interventions, étape par étape.\n"
+            "Captures et rapports restent sur ce poste : aucun compte, aucune télémétrie.\n\n"
+            f"Python {sys.version.split()[0]} · Tk {self.root.tk.call('info', 'patchlevel')}\n"
+            "Licence GNU AGPL v3",
+            parent=self.root)
+
     # ----- Barre flottante pendant l’enregistrement ------------------------------
 
     def _sync_floating_bar(self) -> None:
@@ -877,7 +1142,7 @@ class StepWatchApp:
             self._bar = FloatingBar(self.root, font=self._ui_font, icon=self._bar_icon,
                                     on_pause=self._pause, on_resume=self._resume, on_note=self._add_note,
                                     on_stop=self._stop, on_expand=self._expand_from_bar, scale=self._scale)
-            self._bar.show()
+            self._bar.show(self._prefs.values["bar_position"])
             self._bar.update_idletasks()
             self._bar_excluded = exclude_from_capture(self._window_handle(self._bar))
             self.root.withdraw()
@@ -898,7 +1163,8 @@ class StepWatchApp:
         hotkeys = self._hotkeys
         if hotkeys is None:
             return
-        wanted = state in {"recording", "paused"} and not self._closing
+        wanted = (state in {"recording", "paused"} and not self._closing
+                  and self._prefs.values["global_hotkeys"])
         if wanted and not self._hotkeys_on:
             self._hotkeys_on = True
             if hotkeys.start():
@@ -1042,15 +1308,18 @@ class StepWatchApp:
         self._update_controls()
 
     def _open_session(self) -> None:
-        if self._session_dir is None:
-            return
+        if self._session_dir is not None:
+            self._open_path(self._session_dir)
+
+    def _open_path(self, path: Path) -> None:
         try:
+            path.mkdir(parents=True, exist_ok=True) if not path.exists() else None
             if sys.platform == "win32":
-                os.startfile(str(self._session_dir))
+                os.startfile(str(path))
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(self._session_dir)])
+                subprocess.Popen(["open", str(path)])
             else:
-                subprocess.Popen(["xdg-open", str(self._session_dir)])
+                subprocess.Popen(["xdg-open", str(path)])
         except OSError as exc:
             self._write_log(f"Ouverture du dossier impossible : {exc}")
 

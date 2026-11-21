@@ -66,6 +66,7 @@ STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 't
 11. Enregistrez un moniteur entier avec la barre flottante. Cliquez sur ses boutons : aucune étape ne doit apparaître. Sous Windows 10 2004+ et 11, la barre ne doit pas figurer dans les PNG (`SetWindowDisplayAffinity`). Déplacez-la au-dessus de la cible et vérifiez de nouveau.
 12. Dans l'onglet **Guide**, modifiez un titre, une description, l'ordre, supprimez une étape et masquez une zone. Vérifiez `rapport.html`, `rapport.md`, `captures/retirees/` et la suppression d'un rapport autonome existant.
 13. Pendant un enregistrement, utilisez Ctrl+Maj+F9, F10 et F11 depuis une autre application (Bloc-notes) : pause, note et arrêt doivent répondre, et aucune autre frappe ne doit apparaître dans le journal ni dans les rapports. Lancez StepWatch une seconde fois : un message doit l'empêcher.
+14. Parcourez chaque menu pendant et hors enregistrement (entrées grisées ou actives), puis modifiez chaque paramètre dans **Paramètres…**, relancez StepWatch et vérifiez qu'il est conservé.
 
 ## Validation sur un bureau Linux
 

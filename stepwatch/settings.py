@@ -37,7 +37,35 @@ DEFAULTS: dict[str, Any] = {
     "advanced_open": False,
     "geometry": "",
     "recent": [],
+    # Fenêtre Paramètres.
+    "name_template": "Nouvelle intervention",
+    "bar_position": "bas",
+    "global_hotkeys": True,
+    "sound": False,
+    "open_guide_after_stop": True,
+    "confirm_delete": True,
+    "keep_retired": True,
+    "auto_standalone": False,
+    "font_scale": 100,
 }
+
+#: Allowed values of the preferences that are a choice.
+CHOICES: dict[str, tuple] = {
+    "bar_position": ("bas", "haut"),
+    "font_scale": (90, 100, 115, 130),
+}
+
+
+def expand_name(template: str, now=None) -> str:
+    """Guide name from a template: {date} (JJ/MM/AAAA) and {heure} (HH:MM)."""
+    from datetime import datetime
+
+    now = now or datetime.now()
+    try:
+        name = template.format(date=now.strftime("%d/%m/%Y"), heure=now.strftime("%H:%M"))
+    except (KeyError, IndexError, ValueError):
+        name = template  # Unknown placeholder or stray brace: keep the text as typed.
+    return " ".join(name.split())[:200] or "Nouvelle intervention"
 
 
 def default_path(platform: str | None = None, environ=None) -> Path:
@@ -60,6 +88,9 @@ def _clean(raw: Any) -> dict[str, Any]:
         if isinstance(default, bool):
             if isinstance(value, bool):
                 values[key] = value
+        elif isinstance(default, int):
+            if isinstance(value, int) and not isinstance(value, bool) and value in CHOICES.get(key, (value,)):
+                values[key] = value
         elif isinstance(default, str):
             if isinstance(value, str) and len(value) <= (MASKS_MAX_LENGTH if key == "masks" else 1000):
                 values[key] = value
@@ -67,15 +98,30 @@ def _clean(raw: Any) -> dict[str, Any]:
             values[key] = [item for item in value if isinstance(item, str) and 0 < len(item) <= 1000][:RECENT_LIMIT]
     if values["geometry"] and not _GEOMETRY.fullmatch(values["geometry"]):
         values["geometry"] = ""
+    for key, allowed in CHOICES.items():
+        if values[key] not in allowed:
+            values[key] = DEFAULTS[key]
     return values
 
 
 class Preferences:
     """Load once, change ``values``, then ``save()``."""
 
-    def __init__(self, path: Path | None = None):
+    def __init__(self, path: Path | None = None, *, persistent: bool = True):
+        self.persistent = persistent
         self.path = Path(path) if path is not None else default_path()
-        self.values = self._load()
+        self.values = self._load() if persistent else _clean(None)
+
+    @classmethod
+    def memory(cls) -> "Preferences":
+        """Defaults that are never read from or written to disk (tests, self-test)."""
+        return cls(persistent=False)
+
+    def reset(self) -> None:
+        """Back to defaults, keeping the recent guides list."""
+        recent = list(self.values["recent"])
+        self.values = _clean(None)
+        self.values["recent"] = recent
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -93,6 +139,8 @@ class Preferences:
         del self.values["recent"][RECENT_LIMIT:]
 
     def save(self) -> bool:
+        if not self.persistent:
+            return True
         temporary = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
