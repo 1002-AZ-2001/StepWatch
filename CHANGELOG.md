@@ -4,6 +4,17 @@
 
 Rien pour l'instant.
 
+## 0.8.0 — 2026-11-21
+
+Confort d'utilisation : StepWatch se souvient de vos réglages, se pilote au clavier et permet de revenir sur une modification du guide.
+
+- **Préférences retenues** entre deux lancements : dossier des guides, cible, mode, réglages avancés et leur ouverture, masques, barre flottante, taille de la fenêtre. Fichier local `settings.json` (`%APPDATA%\StepWatch` ou `~/.config/stepwatch`) ; un fichier absent, invalide ou non inscriptible n'empêche jamais le lancement.
+- **Raccourcis d'enregistrement** : Ctrl+Maj+F9 pause/reprise, Ctrl+Maj+F10 note, Ctrl+Maj+F11 arrêt. Sous Windows, ils fonctionnent dans toutes les applications grâce à `RegisterHotKey`, qui ne signale que ces combinaisons : aucune autre frappe n'est observée. Une combinaison déjà prise par une autre application est signalée dans le journal. Sous Linux, ils fonctionnent dans les fenêtres de StepWatch.
+- **Raccourcis de l'éditeur** : Suppr, Ctrl+↑/↓, Ctrl+Z, F2. Ils n'agissent pas pendant la saisie d'un texte ni quand l'onglet Guide est masqué.
+- **Annuler** : titre, description, nom du guide, ordre et suppression d'une étape (la capture revient de `captures/retirees/`). Le masquage reste définitif.
+- **Guides récents** dans **Ouvrir un guide ▾** : dossiers déjà ouverts et interventions du dossier des guides, les plus récents d'abord.
+- **Instance unique** : un second lancement affiche un message et s'arrête (code 3), au lieu d'installer un second hook souris. L'auto-test reste possible pendant que StepWatch est ouvert.
+
 ## 0.7.0 — 2026-11-19
 
 Nouvelle interface et éditeur de guide, inspirés d'OpenSteps pour l'usage : StepWatch se fait discret pendant l'enregistrement, et l'intervention se met en forme avant d'être partagée.

@@ -6,7 +6,28 @@ import sys
 
 from stepwatch import __version__, diagnostics
 from stepwatch.display import display_problem, session_type
+from stepwatch.instance import InstanceLock
 from stepwatch.platform import enable_dpi_awareness
+
+ALREADY_RUNNING = ("StepWatch est déjà ouvert. Utilisez la fenêtre ou la barre flottante existante : "
+                   "deux instances enregistreraient deux fois les mêmes clics.")
+
+
+def _tell_already_running():
+    """Message visible même sans console (exécutable Windows sans fenêtre de commande)."""
+    if sys.stderr is not None:
+        print(f"StepWatch : {ALREADY_RUNNING}", file=sys.stderr)
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            messagebox.showinfo("StepWatch", ALREADY_RUNNING, parent=root)
+        finally:
+            root.destroy()
+    except Exception:
+        logging.getLogger("stepwatch").exception("Message « déjà ouvert » non affiché")
 
 
 def _parse(argv):
@@ -36,8 +57,16 @@ def main(argv=None):
             if sys.stderr is not None:
                 print(f"StepWatch : {problem}", file=sys.stderr)
             return 2
-        from stepwatch.ui import run_app
-        run_app(log_path)
+        lock = InstanceLock()
+        if not lock.acquire():
+            logger.warning("Une autre instance de StepWatch est déjà ouverte.")
+            _tell_already_running()
+            return 3
+        try:
+            from stepwatch.ui import run_app
+            run_app(log_path)
+        finally:
+            lock.release()
         return 0
     except Exception:
         logger.exception("Arrêt sur une erreur du thread principal")

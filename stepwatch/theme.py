@@ -116,6 +116,11 @@ def apply_theme(root: tk.Misc, ui: str, row_height: int) -> ttk.Style:
                     relief="flat", arrowcolor="#ffffff", font=(ui, 10, "bold"),
                     bordercolor=p["primary"], lightcolor=p["primary"], darkcolor=p["primary"])
     style.map("TMenubutton", background=[("disabled", "#d0d5dd"), ("active", p["primary_hover"])])
+    style.configure("Secondary.TMenubutton", background=p["surface"], foreground=p["text"], padding=(14, 7),
+                    relief="raised", arrowcolor=p["muted"], font=(ui, 10),
+                    bordercolor=p["border_strong"], lightcolor=p["surface"], darkcolor=p["surface"])
+    style.map("Secondary.TMenubutton", background=[("disabled", p["surface"]), ("active", p["hover"])],
+              foreground=[("disabled", p["disabled_text"])])
 
     field = {"fieldbackground": p["surface"], "bordercolor": p["border_strong"],
              "lightcolor": p["surface"], "darkcolor": p["surface"], "padding": 6}

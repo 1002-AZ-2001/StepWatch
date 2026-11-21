@@ -98,6 +98,26 @@ L'onglet **Guide** ouvre l'intervention qui vient d'être enregistrée, ou un au
 
 Après une modification, un rapport autonome déjà créé contient l'ancienne version, parfois avec l'étape supprimée ou la zone non masquée : StepWatch le supprime et l'indique dans le journal. Exportez-le de nouveau avant de le partager.
 
+**↶ Annuler** (Ctrl+Z) revient sur les dernières modifications : titre, description, nom du guide, ordre, et suppression (la capture revient de `captures/retirees/`). Le masquage, lui, ne s'annule pas. **Ouvrir un guide ▾** propose les guides récents : ceux déjà ouverts et ceux du dossier des guides.
+
+## Raccourcis clavier
+
+| Raccourci | Action |
+| --- | --- |
+| Ctrl+Maj+F9 | Pause ou reprise de l'enregistrement |
+| Ctrl+Maj+F10 | Ajouter une note à la dernière étape |
+| Ctrl+Maj+F11 | Arrêter l'enregistrement |
+| Suppr | Supprimer l'étape sélectionnée (onglet Guide) |
+| Ctrl+↑ / Ctrl+↓ | Déplacer l'étape sélectionnée |
+| Ctrl+Z | Annuler la dernière modification du guide |
+| F2 | Modifier le titre de l'étape |
+
+Sous Windows, les trois raccourcis d'enregistrement fonctionnent dans toutes les applications : StepWatch les réserve avec `RegisterHotKey`, qui ne signale que ces combinaisons ; aucune autre frappe n'est observée. Si une autre application utilise déjà une combinaison, le journal l'indique. Sous Linux, ils fonctionnent quand une fenêtre de StepWatch a le focus. Dans un champ de texte, Suppr, Ctrl+Z et Ctrl+flèches gardent leur sens habituel.
+
+## Préférences
+
+StepWatch retient d'un lancement à l'autre le dossier des guides, la cible, le mode, les réglages avancés, les masques, la barre flottante, la taille de la fenêtre et les guides récents. Le fichier `settings.json` reste sur le poste : `%APPDATA%\StepWatch` sous Windows, `~/.config/stepwatch` sous Linux. Supprimez-le pour revenir aux réglages par défaut. Une seule fenêtre StepWatch peut être ouverte à la fois : un second lancement affiche un message et s'arrête.
+
 ## Captures et rapports
 
 ![Extrait d'un rapport : en-tête et étape avec marqueur de clic et note du technicien](docs/rapport.png)

@@ -84,6 +84,18 @@ def native_smoke() -> None:
         target = selected[0]
         monitors = backend.list_monitors()
         require(bool(monitors), "MSS did not report a physical monitor")
+        # Single instance: a second named mutex in the session must be refused.
+        from stepwatch.instance import InstanceLock
+        first, second = InstanceLock(), InstanceLock()
+        require(first.acquire(), "The single-instance mutex could not be created")
+        require(not second.acquire(), "A second StepWatch instance was not detected")
+        first.release()
+        # Global recording shortcuts: real RegisterHotKey/GetMessage thread.
+        from stepwatch.hotkeys import GlobalHotkeys
+        hotkeys = GlobalHotkeys()
+        require(hotkeys.start(), "The global hot key thread did not start")
+        hotkeys.stop()
+        require(hotkeys._thread is None, "The global hot key thread did not stop")
         # Hook watchdog probe: the real GetAsyncKeyState binding must answer.
         require(isinstance(backend._windows().mouse_button_down(), bool),
                 "GetAsyncKeyState did not report the mouse button state")
