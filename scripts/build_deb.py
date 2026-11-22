@@ -94,14 +94,14 @@ def prune_qt_bundle(bundle: Path) -> list[str]:
             continue
         for plugin in sorted(directory.iterdir()):
             if plugin.name not in kept:
-                removed.append(str(plugin.relative_to(bundle)))
+                removed.append(plugin.relative_to(bundle).as_posix())
                 plugin.unlink() if plugin.is_file() else shutil.rmtree(plugin)
         if not any(directory.iterdir()):
             directory.rmdir()
     translations = qt / "translations"
     for translation in sorted(translations.glob("*")) if translations.is_dir() else ():
         if translation.name not in QT_TRANSLATIONS:
-            removed.append(str(translation.relative_to(bundle)))
+            removed.append(translation.relative_to(bundle).as_posix())
             translation.unlink()
     # Bibliothèques atteignables depuis l'exécutable, les modules Python et les greffons.
     files = [path for path in bundle.rglob("*") if path.is_file() and not path.is_symlink()]
@@ -119,10 +119,10 @@ def prune_qt_bundle(bundle: Path) -> list[str]:
                 pending.append(libraries[name])
     for name, path in sorted(libraries.items()):
         if name not in reachable and not name.startswith("libpython"):
-            removed.append(str(path.relative_to(bundle)))
+            removed.append(path.relative_to(bundle).as_posix())
             path.unlink()
     for link in [path for path in bundle.rglob("*") if path.is_symlink() and not path.exists()]:
-        removed.append(str(link.relative_to(bundle)))  # Lien vers une bibliothèque retirée.
+        removed.append(link.relative_to(bundle).as_posix())  # Lien vers une bibliothèque retirée.
         link.unlink()
     return removed
 

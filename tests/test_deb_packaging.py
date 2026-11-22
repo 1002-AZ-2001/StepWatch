@@ -110,7 +110,7 @@ class DebianPackagingTests(unittest.TestCase):
         needed = {str(self.bundle / name): value or set() for name, value in files.items()}
         with patch.object(packaging, "_needed", side_effect=lambda path: needed.get(str(path), set())):
             removed = packaging.prune_qt_bundle(self.bundle)
-        remaining = {str(path.relative_to(self.bundle)) for path in self.bundle.rglob("*") if path.is_file()}
+        remaining = {path.relative_to(self.bundle).as_posix() for path in self.bundle.rglob("*") if path.is_file()}
         for name in ("plugins/platforms/libqxcb.so", "plugins/wayland-shell-integration/libxdg-shell.so",
                      "lib/libQt6XcbQpa.so.6", "lib/libQt6Gui.so.6", "translations/qtbase_fr.qm"):
             self.assertIn(f"_internal/PySide6/Qt/{name}", remaining)
