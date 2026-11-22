@@ -28,6 +28,7 @@ from .storage import SessionStore, export_markdown, export_standalone, import_sh
 from .library import recent_guides
 from .settings import Preferences, default_path as settings_path, expand_name
 from .settings_dialog import SettingsDialog
+from . import updater
 from .theme import PALETTE, STATUS_COLOURS, apply_theme, pick_fonts, render_icon
 
 LOGGER = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ ISSUES_URL = "https://github.com/1002-AZ-2001/StepWatch/issues"
 #: Préférences modifiables dans la fenêtre Paramètres.
 SETTINGS_KEYS = ("name_template", "output", "compact", "bar_position", "global_hotkeys", "sound",
                  "open_guide_after_stop", "auto_standalone", "confirm_delete", "keep_retired",
-                 "font_scale", "advanced_open")
+                 "font_scale", "advanced_open", "check_updates")
 
 
 class StepWatchApp:
@@ -107,6 +108,9 @@ class StepWatchApp:
         self._regions_key = None
         self._hotkeys = GlobalHotkeys() if GlobalHotkeys.supported() else None
         self._hotkeys_on = False
+        self._update_thread: threading.Thread | None = None
+        self._pending_release: updater.Release | None = None
+        self._update_dialog = None
 
         self.name = tk.StringVar(value="Nouvelle intervention")
         self.output = tk.StringVar(value=str(Path.home() / "Documents" / "StepWatch"))
@@ -742,6 +746,10 @@ class StepWatchApp:
         self.name.set(expand_name(values["name_template"]))
         if values["auto_standalone"]:
             self._export_when_idle(attempts=100)
+        if self._pending_release is not None:
+            # Mise à jour trouvée pendant l’enregistrement : proposée maintenant.
+            release, self._pending_release = self._pending_release, None
+            self.root.after(500, lambda: self._show_update(release))
 
     def _export_when_idle(self, attempts: int) -> None:
         """Rapport autonome automatique, dès que la relecture du guide est terminée."""
@@ -842,6 +850,8 @@ class StepWatchApp:
                             "toutes les captures : protégez-le comme le dossier de l’intervention.")
             if event.get("markdown"):
                 self._write_log(f"Rapport Markdown : {event['markdown']} (liens vers captures/).")
+        elif event["type"] == "update":
+            self._update_checked(event)
         elif event["type"] == "selfcheck":
             self._write_log(event["message"])
             if not self._closing:
@@ -971,6 +981,7 @@ class StepWatchApp:
                 ("Ouvrir le dossier des paramètres", None, None,
                  lambda: self._open_path(settings_path().parent)),
                 ("Vérifier l’installation", None, None, self._check_installation),
+                ("Rechercher des mises à jour…", None, None, lambda: self.check_updates(manual=True)),
                 None,
                 ("À propos de StepWatch", None, None, self._show_about),
             ],
@@ -1103,6 +1114,100 @@ class StepWatchApp:
 
         threading.Thread(target=work, name="StepWatch-verification", daemon=True).start()
         self._write_log("Vérification de l’installation en cours…")
+
+    # ----- Mises à jour ------------------------------------------------------------
+
+    def schedule_update_check(self, delay_ms: int = 4000) -> None:
+        """Vérification automatique au démarrage : au plus une fois par jour, désactivable."""
+        values = self._prefs.values
+        if (self._prefs.persistent and values["check_updates"]
+                and values["last_update_check"] != time.strftime("%Y-%m-%d")):
+            self.root.after(delay_ms, lambda: self.check_updates(manual=False))
+
+    def check_updates(self, manual: bool = False) -> None:
+        if self._closing or (self._update_thread is not None and self._update_thread.is_alive()):
+            return
+
+        def work() -> None:
+            try:
+                event = {"type": "update", "manual": manual, "release": updater.fetch_latest()}
+            except updater.UpdateError as exc:
+                event = {"type": "update", "manual": manual, "error": str(exc)}
+            except Exception as exc:
+                LOGGER.exception("Recherche de mise à jour en échec")
+                event = {"type": "update", "manual": manual, "error": f"Recherche impossible : {exc}"}
+            self._background_events.put(event)
+
+        self._update_thread = threading.Thread(target=work, name="StepWatch-version", daemon=True)
+        self._update_thread.start()
+        if manual:
+            self._write_log("Recherche d’une nouvelle version sur GitHub…")
+
+    def _update_checked(self, event: dict) -> None:
+        from . import __version__
+
+        manual = event["manual"]
+        self._prefs.values["last_update_check"] = time.strftime("%Y-%m-%d")
+        self._prefs.save()
+        if "error" in event:
+            self._write_log(f"Mises à jour : {event['error']}", level=logging.INFO if manual else logging.DEBUG)
+            if manual and not self._closing:
+                messagebox.showerror("Rechercher des mises à jour", event["error"], parent=self.root)
+            return
+        release: updater.Release = event["release"]
+        if not updater.is_newer(release.version):
+            if manual:
+                self._write_log(f"StepWatch {__version__} est à jour.")
+                if not self._closing:
+                    messagebox.showinfo("Rechercher des mises à jour",
+                                        f"StepWatch {__version__} est la dernière version publiée.", parent=self.root)
+            return
+        self._write_log(f"Nouvelle version disponible : StepWatch {release.version} ({release.page}).")
+        if not manual and release.version == self._prefs.values["skipped_version"]:
+            return
+        if self._active():
+            self._pending_release = release  # Ne pas interrompre l’intervention.
+            return
+        self._show_update(release)
+
+    def _show_update(self, release: updater.Release):
+        if self._closing:
+            return None
+        dialog = self._update_dialog
+        if dialog is not None and dialog.winfo_exists():
+            dialog.lift()
+            return dialog
+        from .update_dialog import UpdateDialog
+
+        self._update_dialog = UpdateDialog(self.root, release, updater.detect_installation(), font=self._ui_font,
+                                           blocked=self._update_blocked, on_skip=self._skip_version,
+                                           on_installed=self._update_installed, open_url=self._open_url)
+        return self._update_dialog
+
+    def _update_blocked(self) -> str | None:
+        if self._active():
+            return "Arrêtez d’abord l’enregistrement en cours : la mise à jour redémarre StepWatch."
+        if self._background_running():
+            return "Un rapport est en cours de création. Réessayez dans quelques secondes."
+        return None
+
+    def _skip_version(self, version: str) -> None:
+        self._prefs.values["skipped_version"] = version
+        self._prefs.save()
+        self._write_log(f"Version {version} ignorée : elle ne sera plus proposée au démarrage.")
+
+    def _update_installed(self, command: list[str] | None) -> None:
+        self._write_log("Mise à jour installée. Redémarrage de StepWatch…")
+        if command:
+            try:
+                updater.relaunch(command)
+            except OSError as exc:
+                self._write_log(f"Redémarrage automatique impossible ({exc}) : relancez StepWatch.")
+                messagebox.showinfo("Mise à jour de StepWatch",
+                                    "Mise à jour installée. Relancez StepWatch pour utiliser la nouvelle version.",
+                                    parent=self.root)
+                return
+        self._close()
 
     def _show_shortcuts(self) -> None:
         lines = [
@@ -1457,6 +1562,7 @@ def run_app(log_path: Path | None = None) -> None:
     app = None
     try:
         app = StepWatchApp(root, log_path, preferences=Preferences())
+        app.schedule_update_check()
         root.mainloop()
     finally:
         # Ctrl+C dans la console ou exception sortie de la boucle Tk : sans

@@ -124,9 +124,9 @@ Sous Windows, les trois raccourcis d'enregistrement fonctionnent dans toutes les
 | **Enregistrement** | Démarrer (Ctrl+R), pause/reprise, note, arrêt, actualiser les cibles (F5), barre flottante. |
 | **Guide** | Annuler, modifier le titre, monter, descendre, masquer une zone, supprimer l'étape. |
 | **Affichage** | Onglets Enregistrer, Guide et Journal (Ctrl+1, 2, 3), réglages avancés. |
-| **Aide** | Raccourcis clavier (F1), documentation en ligne, signaler un problème, dossiers du journal et des paramètres, vérifier l'installation, à propos. |
+| **Aide** | Raccourcis clavier (F1), documentation en ligne, signaler un problème, dossiers du journal et des paramètres, vérifier l'installation, **rechercher des mises à jour**, à propos. |
 
-Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) sont grisées. La documentation en ligne et le signalement d'un problème ouvrent votre navigateur sur GitHub ; StepWatch lui-même n'envoie rien.
+Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) sont grisées. La documentation en ligne et le signalement d'un problème ouvrent votre navigateur sur GitHub.
 
 ![Fenêtre Paramètres, onglet Guide et rapports](docs/parametres.png)
 
@@ -134,7 +134,7 @@ Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) son
 
 | Onglet | Paramètres |
 | --- | --- |
-| Général | Nom proposé pour un nouveau guide, avec `{date}` et `{heure}` (par exemple « Poste {date} ») ; dossier des guides. |
+| Général | Nom proposé pour un nouveau guide, avec `{date}` et `{heure}` (par exemple « Poste {date} ») ; dossier des guides ; recherche des mises à jour au démarrage. |
 | Enregistrement | Barre flottante et sa position (en bas ou en haut de l'écran) ; raccourcis globaux sous Windows ; signal sonore à chaque étape. |
 | Guide et rapports | Ouvrir l'onglet Guide à l'arrêt ; créer le rapport autonome automatiquement à l'arrêt ; confirmer une suppression ; conserver ou effacer la capture d'une étape supprimée. |
 | Interface | Taille du texte (90 à 130 %, au prochain lancement) ; réglages avancés ouverts au démarrage. |
@@ -142,6 +142,23 @@ Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) son
 **Réinitialiser** revient aux valeurs par défaut en gardant la liste des guides récents. Si vous choisissez d'effacer la capture d'une étape supprimée, StepWatch demande toujours confirmation, et cette suppression ne peut pas être annulée.
 
 StepWatch retient aussi d'un lancement à l'autre la cible, le mode, les réglages avancés, les masques, la taille de la fenêtre et les guides récents. Le fichier `settings.json` reste sur le poste : `%APPDATA%\StepWatch` sous Windows, `~/.config/stepwatch` sous Linux. Supprimez-le pour revenir aux réglages par défaut. Une seule fenêtre StepWatch peut être ouverte à la fois : un second lancement affiche un message et s'arrête.
+
+## Mises à jour automatiques
+
+![Fenêtre de mise à jour pendant le téléchargement](docs/mise-a-jour.png)
+
+Au démarrage, au plus une fois par jour, StepWatch demande à GitHub la dernière version publiée. Si elle est plus récente, une fenêtre affiche ses notes avec quatre choix : **Installer et redémarrer**, **Plus tard**, **Ignorer cette version** ou **Voir sur GitHub**. **Aide › Rechercher des mises à jour…** fait la même vérification à la demande. Une version trouvée pendant un enregistrement n'est proposée qu'à l'arrêt.
+
+| Installation | Mise à jour |
+| --- | --- |
+| Exécutable Windows (`.exe`) | Le fichier est remplacé, l'ancien est effacé au démarrage suivant. Le nom du fichier ne change pas. |
+| Dossier portable Windows (`.zip`) | Les fichiers du dossier sont remplacés après la fermeture de StepWatch, puis l'application redémarre. Les autres fichiers du dossier sont conservés. |
+| Paquet Debian / Ubuntu ou Arch Linux | `apt-get install` ou `pacman -U` via `pkexec` : le mot de passe administrateur est demandé. |
+| Depuis les sources | Aucune installation : la fenêtre ouvre la page de la version. |
+
+Avant toute installation, le fichier téléchargé est comparé à deux sommes SHA-256 : celle que GitHub calcule pour chaque fichier publié, et celle du fichier `SHA256SUMS` de la version. Un écart, une somme absente ou un téléchargement incomplet annule la mise à jour, et la version installée reste en place. Ces sommes détectent un fichier corrompu ou modifié en chemin. Elles ne protègent pas contre une version publiée par une personne qui prendrait le contrôle du dépôt : les fichiers ne sont pas encore signés.
+
+C'est le seul accès réseau de StepWatch : une requête à l'API publique des versions de GitHub, qui voit l'adresse IP du poste. Aucune capture, aucun journal ni aucun identifiant n'est envoyé. Décochez **Paramètres › Général › Rechercher les mises à jour au démarrage** pour ne vérifier que sur demande. Si l'exécutable est dans un dossier protégé (`C:\Program Files`, par exemple), StepWatch indique qu'il faut le remplacer manuellement.
 
 ## Captures et rapports
 

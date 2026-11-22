@@ -2,6 +2,17 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 1.0 — interface Qt (prévue)
+
+- Réécriture de l'interface avec PySide6 (Qt 6, LGPL) : Wayland natif, affichage haute résolution, thème sombre, icône dans la zone de notification.
+- Le moteur de capture, le stockage, les rapports et la mise à jour automatique restent identiques.
+- À mesurer : taille des exécutables avec Qt (modules inutiles exclus).
+
+## Version 0.10 — mises à jour automatiques
+
+- Fait : recherche quotidienne désactivable, fenêtre de mise à jour, téléchargement vérifié par SHA-256, installation pour l'exécutable, le dossier portable, les paquets Debian et Arch.
+- À venir : signature des fichiers publiés (Authenticode sous Windows, signature des paquets) pour ne plus dépendre uniquement des sommes publiées dans la même version.
+
 ## Version 0.9 — menus et paramètres
 
 Barre de menus (Fichier, Enregistrement, Guide, Affichage, Aide) avec raccourcis et entrées grisées selon le contexte, inspirée de MusicScope ; fenêtre **Paramètres** : nom de guide avec date et heure, position de la barre flottante, raccourcis globaux, signal sonore, onglet Guide et rapport autonome à l'arrêt, confirmation et conservation des captures supprimées, taille du texte.

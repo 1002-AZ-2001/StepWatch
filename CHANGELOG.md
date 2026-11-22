@@ -4,6 +4,20 @@
 
 Rien pour l'instant.
 
+## 0.10.0 — 2026-11-22
+
+Mises à jour automatiques.
+
+- **Recherche des mises à jour** au démarrage, au plus une fois par jour, et à la demande dans **Aide › Rechercher des mises à jour…**. Désactivable dans **Paramètres › Général**. Une version trouvée pendant un enregistrement est proposée à l'arrêt.
+- **Fenêtre « Mise à jour disponible »** : notes de version, **Installer et redémarrer**, **Plus tard**, **Ignorer cette version**, **Voir sur GitHub**, avec la progression du téléchargement.
+- **Installation selon la forme de StepWatch** :
+  - exécutable Windows : remplacé en place ; l'ancien fichier est effacé au démarrage suivant ;
+  - dossier portable : fichiers copiés par un script PowerShell après la fermeture, puis redémarrage ;
+  - paquets Debian/Ubuntu et Arch Linux : `pkexec apt-get install` ou `pkexec pacman -U` ;
+  - depuis les sources : lien vers la page de la version.
+- **Vérification SHA-256 obligatoire** avant toute installation : empreinte GitHub du fichier et fichier `SHA256SUMS` de la version, qui doivent concorder. HTTPS uniquement. Les certificats du système sont utilisés si Python embarqué ne trouve pas les siens (paquets Linux).
+- Après une mise à jour, la nouvelle version attend la fermeture de l'ancienne avant de démarrer (instance unique).
+
 ## 0.9.0 — 2026-11-21
 
 Barre de menus et fenêtre Paramètres.

@@ -55,6 +55,10 @@ class SettingsDialog(tk.Toplevel):
         folder.columnconfigure(0, weight=1)
         ttk.Entry(folder, textvariable=self.vars["output"]).grid(row=0, column=0, sticky="ew")
         ttk.Button(folder, text="Parcourir…", command=self._choose_folder).grid(row=0, column=1, padx=(8, 0))
+        ttk.Frame(general, style="Card.TFrame", height=12).grid()
+        self._check(general, "check_updates", "Rechercher les mises à jour au démarrage (une fois par jour)")
+        self._hint(general, "Seul accès réseau de StepWatch : une requête à l’API publique des versions "
+                            "sur GitHub. Aucune capture ni donnée de l’intervention n’est envoyée.")
 
         recording = self._page(tabs, "Enregistrement")
         self._check(recording, "compact", "Réduire StepWatch en barre flottante pendant l’enregistrement")

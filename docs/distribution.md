@@ -10,7 +10,7 @@ Chaque version publiée se trouve dans les [Releases GitHub](https://github.com/
 | `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux x86_64. |
 | `SHA256SUMS-windows.txt`, `SHA256SUMS-linux.txt` | Sommes SHA-256 des fichiers ci-dessus. |
 
-Python est inclus dans tous les fichiers. Aucun ne contient d'identifiant, de télémétrie ni de service réseau.
+Python est inclus dans tous les fichiers. Aucun ne contient d'identifiant ni de télémétrie. Le seul accès réseau est la recherche de mises à jour sur GitHub, désactivable (voir le [README](../README.md#mises-à-jour-automatiques)). Les mises à jour automatiques fonctionnent à partir de la version 0.10.0 : installez une fois la 0.10.0 manuellement depuis une version antérieure.
 
 ## Vérifier un téléchargement
 
