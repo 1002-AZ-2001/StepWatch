@@ -12,13 +12,14 @@ import gc
 import logging
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable
 
 from PIL import Image, ImageDraw
 
 from . import __version__
-from .display import WINDOW_CLASS, display_problem, session_type
+from .display import display_problem, session_type
 from .imaging import apply_masks, changed_percent, mark_click
 from .models import Rect
 from .storage import MARKDOWN_REPORT, STANDALONE_REPORT, SessionStore, export_standalone, import_sharex
@@ -66,42 +67,36 @@ def check_reports(base: Path) -> None:
 
 
 def check_interface(*, capture_x11: bool = False) -> None:
-    """Open the real main window, let Tk draw it, then close it."""
-    import tkinter as tk
-
+    """Ouvre la vraie fenêtre principale, la laisse se dessiner, puis la ferme."""
+    from .qtcompat import application, process_events
     from .ui import StepWatchApp
 
-    root = tk.Tk(className=WINDOW_CLASS)
-    app = None
+    application()
+    app = StepWatchApp()
     try:
-        app = StepWatchApp(root)
-        for _ in range(5):
-            root.update()
-        _check(root.winfo_exists() and root.winfo_width() > 1, "fenêtre non dessinée")
+        app.root.show()
+        for _ in range(10):
+            process_events()
+            time.sleep(0.01)
+        _check(app.root.isVisible() and app.root.width() > 1, "fenêtre non dessinée")
         if capture_x11:
             from .x11 import X11Backend
 
             backend = X11Backend()
             try:
-                # Read a small part of the test window without saving it or
-                # starting a listener. Wayland sessions never open a portal here.
-                rect = Rect(root.winfo_rootx(), root.winfo_rooty(), 24, 24)
-                image = backend.grab(rect)
+                # Lire une petite partie de la fenêtre de test, sans l'enregistrer
+                # ni démarrer d'écoute. Une session Wayland n'ouvre jamais le portail ici.
+                origin = app.root.mapToGlobal(app.root.rect().topLeft())
+                image = backend.grab(Rect(origin.x(), origin.y(), 24, 24))
                 _check(image.mode == "RGB" and image.size == (24, 24), "capture X11 invalide")
             finally:
                 backend.close()
         _check(app.shutdown(timeout=2), "arrêt de l'interface incomplet")
     finally:
-        try:
-            if app is None:
-                root.__dict__.pop("report_callback_exception", None)
-                root.destroy()
-            else:
-                app.dispose()
-        finally:
-            # The caller can start another worker immediately after this check.
-            app = root = None
-            gc.collect()
+        app.dispose()
+        process_events(3)
+        app = None
+        gc.collect()
 
 
 def run(write: Callable[[str], None] | None = None) -> int:
@@ -120,11 +115,11 @@ def run(write: Callable[[str], None] | None = None) -> int:
         write("Images, rapports, notes et import ShareX : OK")
         problem = display_problem()
         if problem:
-            write(f"Interface Tk : non vérifiée — {problem}")
+            write(f"Interface Qt : non vérifiée — {problem}")
         else:
             capture_x11 = sys.platform.startswith("linux") and session == "x11"
             check_interface(capture_x11=capture_x11)
-            write("Interface Tk : OK")
+            write("Interface Qt : OK")
             if capture_x11:
                 write("Capture X11 : OK")
     except Exception as exc:

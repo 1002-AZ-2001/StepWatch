@@ -1,35 +1,44 @@
-"""Interface française. Tous les appels Tk restent sur le thread principal."""
+"""Interface française (Qt). Tous les appels Qt restent sur le thread principal.
+
+Les traitements longs (enregistrement, import, export, relecture, mises à
+jour) tournent sur d'autres threads et communiquent par des files d'attente
+lues par une minuterie Qt (``_poll``).
+"""
 
 from __future__ import annotations
 
-import gc
 import logging
 import os
-from pathlib import Path
 import queue
+import re
 import subprocess
 import sys
 import threading
 import time
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from pathlib import Path
 
-from PIL import Image, ImageTk
+from PIL import Image
+from PySide6.QtCore import QPoint, QTimer, Qt, qVersion
+from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QMainWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
+                               QSizePolicy, QSystemTrayIcon, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
-from .display import WINDOW_CLASS
+from . import updater
 from .engine import Recorder
-from .floating import FloatingBar
-from .hotkeys import LABELS as HOTKEY_LABELS, TK_SEQUENCES, GlobalHotkeys
+from .floating import FloatingBar, StatusDot
+from .hotkeys import LABELS as HOTKEY_LABELS, GlobalHotkeys
 from .imaging import preview_image
+from .library import recent_guides
 from .models import CaptureConfig, CaptureTarget, Rect
 from .platform import capture_backend_factory, exclude_from_capture
-from .review import SessionReview
-from .storage import SessionStore, export_markdown, export_standalone, import_sharex
-from .library import recent_guides
+from .qtcompat import Value, application, filedialog, messagebox, simpledialog, to_pixmap
+from .review import ImageView, SessionReview
 from .settings import Preferences, default_path as settings_path, expand_name
 from .settings_dialog import SettingsDialog
-from . import updater
-from .theme import PALETTE, STATUS_COLOURS, apply_theme, pick_fonts, render_icon
+from .storage import SessionStore, export_markdown, export_standalone, import_sharex
+from .theme import (PALETTE, STATUS_COLOURS, is_dark, pick_fonts, qicon, qpalette, render_icon, set_role, stylesheet,
+                    use_palette)
 
 LOGGER = logging.getLogger(__name__)
 DOCUMENTATION_URL = "https://github.com/1002-AZ-2001/StepWatch#readme"
@@ -37,7 +46,26 @@ ISSUES_URL = "https://github.com/1002-AZ-2001/StepWatch/issues"
 #: Préférences modifiables dans la fenêtre Paramètres.
 SETTINGS_KEYS = ("name_template", "output", "compact", "bar_position", "global_hotkeys", "sound",
                  "open_guide_after_stop", "auto_standalone", "confirm_delete", "keep_retired",
-                 "font_scale", "advanced_open", "check_updates")
+                 "font_scale", "advanced_open", "check_updates", "theme", "tray_icon")
+#: Mêmes combinaisons que les raccourcis globaux, dans les fenêtres de StepWatch.
+LOCAL_HOTKEYS = {"pause": "Ctrl+Shift+F9", "note": "Ctrl+Shift+F10", "stop": "Ctrl+Shift+F11"}
+BASE_FONT_SIZE = 10
+
+
+class MainWindow(QMainWindow):
+    """Fenêtre principale ; la fermeture passe par l'application (arrêt propre)."""
+
+    def __init__(self, app: "StepWatchApp"):
+        super().__init__()
+        self._app = app
+        self.allow_close = False
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self.allow_close:
+            event.accept()
+            return
+        event.ignore()
+        QTimer.singleShot(0, self._app._close)
 
 
 class StepWatchApp:
@@ -61,26 +89,22 @@ class StepWatchApp:
         "error": "Erreur · consulter le journal",
     }
 
-    def __init__(self, root: tk.Tk, log_path: Path | None = None,
-                 preferences: Preferences | None = None) -> None:
-        self.root = root
+    def __init__(self, log_path: Path | None = None, preferences: Preferences | None = None) -> None:
+        self.qapp = application()
         # Sans préférences (tests, auto-test), rien n'est lu ni écrit sur disque.
         self._prefs = preferences if preferences is not None else Preferences.memory()
         self._ui_thread = threading.get_ident()
         self._disposed = False
-        # Sans console (exécutable --windowed), Tk écrirait ces erreurs sur
-        # un sys.stderr absent : elles seraient perdues.
-        self.root.report_callback_exception = self._report_callback_exception
-        self.root.title("StepWatch — Documentation d’intervention")
-        # Tk met les polices (en points) à l’échelle du DPI, pas les tailles en
-        # pixels : sans ce facteur, à 150 % les réglages sont tronqués.
-        font_scale = self._prefs.values["font_scale"]
-        if font_scale != 100:
-            # Taille du texte (Paramètres › Interface) : agrandit polices et marges ensemble.
-            self.root.tk.call("tk", "scaling", float(self.root.tk.call("tk", "scaling")) * font_scale / 100)
-        self._scale = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
-        self._fit_to_screen()
-        self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.quit_on_dispose = False
+        self.root = MainWindow(self)
+        self.root.setWindowTitle("StepWatch — Documentation d’intervention")
+        families = []
+        try:
+            from PySide6.QtGui import QFontDatabase
+            families = QFontDatabase.families()
+        except Exception:
+            pass
+        self._ui_font, self._mono_font = pick_fonts(families)
         self._backend_factory = capture_backend_factory()
         self._backend = self._backend_factory() if self._backend_factory is not None else None
         self._uses_portal = getattr(self._backend, "uses_portal", False) is True
@@ -89,16 +113,13 @@ class StepWatchApp:
         self._listed_source: str | None = None
         self._needs_target_selection = False
         self._last_image: Image.Image | None = None
-        self._photo: ImageTk.PhotoImage | None = None
-        self._preview_key: tuple[Image.Image, int, int] | None = None
         self._session_dir: Path | None = None
         self._import_thread: threading.Thread | None = None
         self._export_thread: threading.Thread | None = None
         self._background_events: queue.Queue = queue.Queue()
         self._closing = False
         self._close_error: str | None = None
-        self._poll_id: str | None = None
-        self._settings_widgets: list[tuple[tk.Widget, str]] = []
+        self._settings_widgets: list[QWidget] = []
         self._controls_key = None
         self._last_state = "idle"
         self._bar: FloatingBar | None = None
@@ -111,368 +132,439 @@ class StepWatchApp:
         self._update_thread: threading.Thread | None = None
         self._pending_release: updater.Release | None = None
         self._update_dialog = None
+        self._settings_dialog = None
+        self._tray: QSystemTrayIcon | None = None
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._poll)
 
-        self.name = tk.StringVar(value="Nouvelle intervention")
-        self.output = tk.StringVar(value=str(Path.home() / "Documents" / "StepWatch"))
-        self.source = tk.StringVar(value=self.SOURCES[0])
-        self.target = tk.StringVar()
-        self.mode = tk.StringVar(value=self.VISUAL_MODE if self._uses_portal else next(iter(self.MODES)))
-        self.interval = tk.StringVar(value="1,0")
-        self.delay = tk.StringVar(value="0,35")
-        self.sensitivity = tk.StringVar(value="2,0")
-        self.conservative = tk.BooleanVar(value=False)
-        self.compact = tk.BooleanVar(value=True)
-        self.region_values = [tk.StringVar(value=value) for value in ("0", "0", "1280", "720")]
-        self.state_text = tk.StringVar(value="Prêt · aucun enregistrement actif")
-        self.kept = tk.StringVar(value="0")
-        self.ignored = tk.StringVar(value="0")
-        self.session_text = tk.StringVar(value="Le dossier et le rapport sont créés au démarrage.")
+        self.name = Value("Nouvelle intervention")
+        self.output = Value(str(Path.home() / "Documents" / "StepWatch"))
+        self.source = Value(self.SOURCES[0])
+        self.mode = Value(self.VISUAL_MODE if self._uses_portal else next(iter(self.MODES)))
+        self.interval = Value("1,0")
+        self.delay = Value("0,35")
+        self.sensitivity = Value("2,0")
+        self.conservative = Value(False)
+        self.compact = Value(True)
+        self.region_values = [Value(value) for value in ("0", "0", "1280", "720")]
+        self.state_text = Value("Prêt · aucun enregistrement actif")
+        self.kept = Value("0")
+        self.ignored = Value("0")
+        self.session_text = Value("Le dossier et le rapport sont créés au démarrage.")
+        self._advanced_open = Value(False)
 
-        self._style()
+        self.apply_theme()
         self._build()
+        self._fit_to_screen()
         self._apply_preferences()
         self._build_menu()
-        # Mêmes combinaisons que les raccourcis globaux, dans les fenêtres de StepWatch.
-        for action, sequence in TK_SEQUENCES.items():
-            self.root.bind_all(sequence, lambda _event, action=action: self._hotkey(action), add="+")
+        self._local_hotkeys = []
+        for action, sequence in LOCAL_HOTKEYS.items():
+            shortcut = QShortcut(QKeySequence(sequence), self.root)
+            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            shortcut.activated.connect(lambda action=action: self._hotkey(action))
+            self._local_hotkeys.append(shortcut)
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):
+            hints.colorSchemeChanged.connect(lambda _scheme: self._prefs.values["theme"] == "systeme"
+                                             and self.apply_theme())
+        self._sync_tray()
         if log_path is not None:
             self._write_log(f"Journal de diagnostic : {log_path}", level=None)
         self._refresh_targets()
         self._poll()
 
-    def _px(self, value: int) -> int:
-        return int(round(value * self._scale))
+    # ----- Apparence ------------------------------------------------------------
 
-    def _fit_to_screen(self) -> None:
-        """Taille par défaut mise à l’échelle, bornée par l’écran principal.
-
-        1190 × 820 dépassait un écran 1366 × 768, courant sur les portables
-        d’intervention : le bas de la fenêtre (journal) était hors écran.
-        """
-        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        # Réserve la barre des tâches et la barre de titre.
-        available_width = max(screen_width - self._px(40), 320)
-        available_height = max(screen_height - self._px(110), 240)
-        width = min(self._px(1190), available_width)
-        height = min(self._px(820), available_height)
-        self.root.minsize(min(self._px(1020), available_width), min(self._px(760), available_height))
-        x = max(0, (screen_width - width) // 2)
-        y = max(0, (available_height - height) // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
-
-    def _style(self) -> None:
-        self._ui_font, self._mono_font = pick_fonts(self.root)
-        apply_theme(self.root, self._ui_font, self._px(34))
-        # Window/dock icon, drawn like packaging/linux/stepwatch.svg. An icon
-        # must never prevent StepWatch from starting.
+    def _system_dark(self) -> bool:
         try:
-            self._icons = [ImageTk.PhotoImage(render_icon(self._px(size)), master=self.root) for size in (64, 32, 16)]
-            self.root.iconphoto(True, *self._icons)
-            self._header_icon = ImageTk.PhotoImage(render_icon(self._px(34)), master=self.root)
-            self._bar_icon = ImageTk.PhotoImage(render_icon(self._px(20)), master=self.root)
-        except (tk.TclError, ImportError) as exc:
-            LOGGER.warning("Icône indisponible : %s", exc)
-            self._icons, self._header_icon, self._bar_icon = [], "", None
+            return QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        except AttributeError:
+            return False
 
-    def _setting(self, widget: tk.Widget, state: str = "normal") -> tk.Widget:
-        if isinstance(widget, ttk.Entry):
-            widget.configure(font=(self._ui_font, 10))
-        self._settings_widgets.append((widget, state))
+    def apply_theme(self) -> None:
+        """Palette (claire, sombre, système) et taille du texte des Paramètres."""
+        values = self._prefs.values
+        use_palette(is_dark(values["theme"], self._system_dark()))
+        self.qapp.setStyle("Fusion")
+        self.qapp.setPalette(qpalette())
+        size = BASE_FONT_SIZE * values["font_scale"] / 100
+        self.qapp.setStyleSheet(stylesheet(self._ui_font, size))
+        self.qapp.setWindowIcon(qicon())
+        if hasattr(self, "_status"):
+            self._set_status_colours(self._status_state)
+            self.log.setStyleSheet(f"font-family: '{self._mono_font}'; color: {PALETTE['log_text']};")
+            self.masks_text.setStyleSheet(f"font-family: '{self._mono_font}';")
+
+    def _fit_to_screen(self, area=None) -> None:
+        """Taille par défaut, bornée par l'écran principal (portables 1366 × 768)."""
+        if area is None:
+            screen = QGuiApplication.primaryScreen()
+            area = screen.availableGeometry() if screen is not None else None
+        width, height = 1190, 820
+        if area is not None:
+            width, height = min(width, area.width() - 20), min(height, area.height() - 40)
+            self.root.setMinimumSize(min(1000, area.width() - 20), min(700, area.height() - 40))
+            self.root.resize(width, height)
+            self.root.move(area.x() + max(0, (area.width() - width) // 2),
+                           area.y() + max(0, (area.height() - height) // 2))
+        else:
+            self.root.resize(width, height)
+
+    @staticmethod
+    def _icon_pixmap(size: int):
+        pixmap = to_pixmap(render_icon(size * 2))
+        pixmap.setDevicePixelRatio(2)
+        return pixmap
+
+    # ----- Construction -------------------------------------------------------------
+
+    def _setting(self, widget: QWidget) -> QWidget:
+        self._settings_widgets.append(widget)
         return widget
 
-    def _section(self, parent: tk.Widget, row: int, title: str, *, pady=(0, 10)) -> ttk.Frame:
-        """Carte blanche avec un titre de section discret, comme un groupe de réglages."""
-        card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 12, 16, 14))
-        card.grid(row=row, column=0, sticky="ew", pady=pady)
-        card.columnconfigure(0, weight=1)
-        ttk.Label(card, text=title.upper(), style="Section.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
-        body = ttk.Frame(card, style="Card.TFrame")
-        body.grid(row=1, column=0, columnspan=4, sticky="ew")
-        body.columnconfigure(0, weight=1)
+    def _section(self, parent_layout: QVBoxLayout, title: str) -> QGridLayout:
+        """Carte avec un titre de section discret, comme un groupe de réglages."""
+        card = set_role(QFrame(), "card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 12, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(set_role(QLabel(title.upper()), "section"))
+        body = QGridLayout()
+        body.setHorizontalSpacing(8)
+        body.setVerticalSpacing(6)
+        layout.addLayout(body)
+        parent_layout.addWidget(card)
         return body
 
+    def _muted(self, text: str) -> QLabel:
+        label = set_role(QLabel(text), "muted")
+        label.setWordWrap(True)
+        return label
+
     def _build(self) -> None:
-        p = PALETTE
-        outer = ttk.Frame(self.root)
-        outer.pack(fill="both", expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(2, weight=1)
+        central = QWidget()
+        central.setObjectName("Page")
+        self.root.setCentralWidget(central)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # En-tête : identité, état de l’enregistrement, actions de session.
-        heading = ttk.Frame(outer, style="Header.TFrame", padding=(20, 12))
-        heading.grid(row=0, column=0, sticky="ew")
-        ttk.Label(heading, image=self._header_icon, style="Card.TLabel").pack(side="left", padx=(0, 10))
-        ttk.Label(heading, text="StepWatch", style="Title.TLabel").pack(side="left", padx=(0, 16))
-        self._status = tk.Frame(heading, bg=p["bg"], padx=10, pady=3)
-        self._status.pack(side="left")
-        self._status_dot = tk.Canvas(self._status, width=self._px(10), height=self._px(10),
-                                     highlightthickness=0, bg=p["bg"])
-        self._status_dot.pack(side="left", padx=(0, 6))
-        self._status_dot_id = self._status_dot.create_oval(1, 1, self._px(10) - 1, self._px(10) - 1, outline="")
-        self._status_label = tk.Label(self._status, textvariable=self.state_text, bg=p["bg"],
-                                      font=(self._ui_font, 9, "bold"))
-        self._status_label.pack(side="left")
-        self.import_button = ttk.Button(heading, text="Importer ShareX", command=self._import)
-        self.import_button.pack(side="right", padx=(8, 0))
-        self.open_session_button = ttk.Menubutton(heading, text="Ouvrir un guide", style="Secondary.TMenubutton")
-        self._recent_menu = tk.Menu(self.open_session_button, tearoff=False, font=(self._ui_font, 10),
-                                    postcommand=self._fill_recent_menu)
-        self.open_session_button.configure(menu=self._recent_menu)
-        self.open_session_button.pack(side="right")
-        ttk.Frame(outer, style="Rule.TFrame", height=1).grid(row=1, column=0, sticky="new")
+        # En-tête : identité, état de l'enregistrement, actions de session.
+        heading = set_role(QWidget(), "header")
+        heading.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        header = QHBoxLayout(heading)
+        header.setContentsMargins(20, 10, 20, 10)
+        logo = QLabel()
+        logo.setPixmap(self._icon_pixmap(34))
+        header.addWidget(logo)
+        header.addWidget(set_role(QLabel("StepWatch"), "title"))
+        header.addSpacing(12)
+        self._status = QFrame()
+        self._status.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        status_layout = QHBoxLayout(self._status)
+        status_layout.setContentsMargins(10, 3, 12, 3)
+        status_layout.setSpacing(6)
+        self._status_dot = StatusDot(10)
+        status_layout.addWidget(self._status_dot)
+        self._status_label = self.state_text.bind_label(QLabel())
+        self._status_label.setStyleSheet("font-weight: 700;")
+        status_layout.addWidget(self._status_label)
+        header.addWidget(self._status)
+        header.addStretch(1)
+        self.open_session_button = QToolButton()
+        self.open_session_button.setText("Ouvrir un guide")
+        self.open_session_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._recent_menu = QMenu(self.open_session_button)
+        self._recent_menu.aboutToShow.connect(lambda: self._fill_recent_menu(self._recent_menu))
+        self.open_session_button.setMenu(self._recent_menu)
+        header.addWidget(self.open_session_button)
+        self.import_button = QPushButton("Importer ShareX")
+        self.import_button.clicked.connect(self._import)
+        header.addWidget(self.import_button)
+        outer.addWidget(heading)
 
-        content = ttk.Frame(outer, padding=(16, 14, 16, 10))
-        content.grid(row=2, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-        content.rowconfigure(1, weight=1)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(16, 14, 16, 10)
+        content_layout.setSpacing(12)
+        outer.addWidget(content, 1)
 
-        # Barre d’enregistrement : l’action principale reste toujours visible.
-        toolbar = ttk.Frame(content, style="Card.TFrame", padding=(12, 10))
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        actions = ttk.Frame(toolbar, style="Card.TFrame")
-        actions.pack(side="left")
-        self.start_button = ttk.Button(actions, text="●  Enregistrer", style="Record.TButton", command=self._start)
-        self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
-        self.resume_button = ttk.Button(actions, text="Reprendre", command=self._resume, state="disabled")
-        self.stop_button = ttk.Button(actions, text="■  Arrêter", command=self._stop, state="disabled")
-        self.note_button = ttk.Button(actions, text="+  Note", command=self._add_note, state="disabled")
+        # Barre d'enregistrement : l'action principale reste toujours visible.
+        toolbar = set_role(QFrame(), "card")
+        tools = QHBoxLayout(toolbar)
+        tools.setContentsMargins(12, 10, 16, 10)
+        self.start_button = set_role(QPushButton("●  Enregistrer"), "record")
+        self.start_button.clicked.connect(self._start)
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.clicked.connect(self._pause)
+        self.resume_button = QPushButton("Reprendre")
+        self.resume_button.clicked.connect(self._resume)
+        self.stop_button = QPushButton("■  Arrêter")
+        self.stop_button.clicked.connect(self._stop)
+        self.note_button = QPushButton("+  Note")
+        self.note_button.clicked.connect(self._add_note)
         for button in (self.start_button, self.pause_button, self.resume_button, self.stop_button, self.note_button):
-            button.pack(side="left", padx=(0, 8))
-        counts = ttk.Frame(toolbar, style="Card.TFrame")
-        counts.pack(side="right", padx=(8, 4))
-        for col, (label, variable) in enumerate((("étapes", self.kept), ("ignorées", self.ignored))):
-            ttk.Label(counts, textvariable=variable, style="Count.TLabel").grid(row=0, column=2 * col, padx=(14, 4))
-            ttk.Label(counts, text=label, style="CardMuted.TLabel").grid(row=0, column=2 * col + 1)
+            tools.addWidget(button)
+        tools.addStretch(1)
+        for label, variable in (("étapes", self.kept), ("ignorées", self.ignored)):
+            tools.addSpacing(12)
+            tools.addWidget(set_role(variable.bind_label(QLabel()), "count"))
+            tools.addWidget(set_role(QLabel(label), "muted"))
+        content_layout.addWidget(toolbar)
 
-        self._tabs = ttk.Notebook(content)
-        self._tabs.grid(row=1, column=0, sticky="nsew")
-        body = ttk.Frame(self._tabs, padding=(0, 12, 0, 0))
-        self._tabs.add(body, text="Enregistrer")
-        body.columnconfigure(0, weight=0, minsize=self._px(420))
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        content_layout.addWidget(self._tabs, 1)
 
-        settings = ttk.Frame(body)
-        settings.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
-        settings.rowconfigure(0, weight=1)
-        settings.columnconfigure(0, weight=1)
-        settings_canvas = tk.Canvas(settings, bg=p["bg"], highlightthickness=0, width=self._px(420))
-        settings_canvas.grid(row=0, column=0, sticky="nsew")
-        settings_scrollbar = ttk.Scrollbar(settings, orient="vertical", command=settings_canvas.yview)
-        settings_scrollbar.grid(row=0, column=1, sticky="ns", padx=(4, 0))
-        settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
-        left = ttk.Frame(settings_canvas)
-        settings_window = settings_canvas.create_window((0, 0), window=left, anchor="nw")
-        left.bind("<Configure>", lambda _event: settings_canvas.configure(scrollregion=settings_canvas.bbox("all")))
-        settings_canvas.bind("<Configure>", lambda event: settings_canvas.itemconfigure(settings_window, width=event.width))
-        left.columnconfigure(0, weight=1)
+        # Onglet Enregistrer : réglages à gauche, aperçu à droite.
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 12, 0, 0)
+        body_layout.setSpacing(14)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(430)
+        scroll.setMaximumWidth(470)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 6, 0)
+        left_layout.setSpacing(10)
+        scroll.setWidget(left)
+        body_layout.addWidget(scroll)
 
-        intervention = self._section(left, 0, "Intervention")
-        ttk.Label(intervention, text="Nom du guide", style="Card.TLabel").grid(row=0, column=0, sticky="w")
-        self._setting(ttk.Entry(intervention, textvariable=self.name)).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 10))
-        ttk.Label(intervention, text="Dossier des guides", style="Card.TLabel").grid(row=2, column=0, sticky="w")
-        self._setting(ttk.Entry(intervention, textvariable=self.output)).grid(row=3, column=0, sticky="ew", pady=(4, 0))
-        self._setting(ttk.Button(intervention, text="Parcourir…", command=self._choose_output)).grid(row=3, column=1, padx=(8, 0), pady=(4, 0))
+        intervention = self._section(left_layout, "Intervention")
+        intervention.addWidget(QLabel("Nom du guide"), 0, 0, 1, 2)
+        intervention.addWidget(self._setting(self.name.bind_line(QLineEdit())), 1, 0, 1, 2)
+        intervention.addWidget(QLabel("Dossier des guides"), 2, 0, 1, 2)
+        intervention.addWidget(self._setting(self.output.bind_line(QLineEdit())), 3, 0)
+        browse = self._setting(QPushButton("Parcourir…"))
+        browse.clicked.connect(self._choose_output)
+        intervention.addWidget(browse, 3, 1)
+        intervention.setColumnStretch(0, 1)
 
-        selection = self._section(left, 1, "Que capturer ?")
+        selection = self._section(left_layout, "Que capturer ?")
         if self._uses_portal:
-            ttk.Label(selection, text="Le portail Wayland vous propose de choisir un écran ou une fenêtre au démarrage.",
-                      style="CardMuted.TLabel", wraplength=self._px(370)).grid(sticky="w")
+            selection.addWidget(self._muted("Le portail Wayland vous propose de choisir un écran ou une fenêtre "
+                                            "au démarrage."), 0, 0)
         else:
             self._build_target_choices(selection)
 
-        capture = self._section(left, 2, "Déclenchement")
+        capture = self._section(left_layout, "Déclenchement")
         if self._uses_portal:
-            ttk.Label(capture, text=self.VISUAL_MODE, style="Card.TLabel").grid(row=0, column=0, sticky="w")
+            capture.addWidget(QLabel(self.VISUAL_MODE), 0, 0)
         else:
-            self._setting(ttk.Combobox(capture, textvariable=self.mode, values=tuple(self.MODES), state="readonly"), "readonly").grid(row=0, column=0, sticky="ew")
-        ttk.Label(capture, text="Les clics et les changements visibles deviennent des étapes. Aucune frappe clavier n’est enregistrée.",
-                  style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self._setting(ttk.Checkbutton(capture, text="Barre flottante pendant l’enregistrement",
-                                      variable=self.compact)).grid(row=2, column=0, sticky="w", pady=(10, 0))
+            self.mode_combo = QComboBox()
+            self.mode_combo.addItems(list(self.MODES))
+            capture.addWidget(self._setting(self.mode.bind_combo(self.mode_combo)), 0, 0)
+        capture.addWidget(self._muted("Les clics et les changements visibles deviennent des étapes. "
+                                      "Aucune frappe clavier n’est enregistrée."), 1, 0)
+        self.compact_check = self._setting(self.compact.bind_check(
+            QCheckBox("Barre flottante pendant l’enregistrement")))
+        capture.addWidget(self.compact_check, 2, 0)
 
-        # Réglages avancés repliés par défaut : la plupart des interventions s’en passent.
-        self._advanced_open = tk.BooleanVar(value=False)
-        self.advanced_button = ttk.Button(left, text="▸  Réglages avancés", style="Link.TButton", command=self._toggle_advanced)
-        self.advanced_button.grid(row=3, column=0, sticky="w", padx=(4, 0), pady=(0, 6))
-        self._advanced = ttk.Frame(left)
-        self._advanced.grid(row=4, column=0, sticky="ew")
-        self._advanced.columnconfigure(0, weight=1)
-        timing = self._section(self._advanced, 0, "Détection")
+        # Réglages avancés repliés par défaut : la plupart des interventions s'en passent.
+        self.advanced_button = set_role(QPushButton("▸  Réglages avancés"), "link")
+        self.advanced_button.clicked.connect(self._toggle_advanced)
+        left_layout.addWidget(self.advanced_button)
+        self._advanced = QWidget()
+        advanced_layout = QVBoxLayout(self._advanced)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(10)
+        timing = self._section(advanced_layout, "Détection")
         fields = [("Intervalle (s)", self.interval)]
         if not self._uses_portal:
             fields.append(("Délai clic (s)", self.delay))
         fields.append(("Seuil (%)", self.sensitivity))
-        for col, (title, variable) in enumerate(fields):
-            ttk.Label(timing, text=title, style="Card.TLabel").grid(row=0, column=col, sticky="w", padx=(0, 8))
-            self._setting(ttk.Entry(timing, textvariable=variable, width=9)).grid(row=1, column=col, sticky="ew", padx=(0, 8 if col < len(fields) - 1 else 0), pady=(4, 0))
-            timing.columnconfigure(col, weight=1)
-        self._setting(ttk.Checkbutton(timing, text="Mode conservateur · détecter les petits changements", variable=self.conservative)).grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
-        ttk.Label(timing, text="Un seuil plus bas conserve davantage de changements visuels.", style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
-        masks = self._section(self._advanced, 1, "Masquage des informations sensibles")
-        ttk.Label(masks, text="Une zone par ligne : x, y, largeur, hauteur, depuis le coin supérieur gauche de la capture. "
-                  "Après l’enregistrement, l’éditeur du guide permet aussi de masquer une zone à la souris.",
-                  style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=0, column=0, sticky="w")
-        self.masks_text = tk.Text(masks, height=3, width=35, font=(self._mono_font, 10), relief="flat", bd=0,
-                                  highlightthickness=1, highlightbackground=p["border_strong"],
-                                  highlightcolor=p["accent"], background=p["surface"], foreground=p["text"],
-                                  padx=6, pady=4)
-        self.masks_text.grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        self._setting(self.masks_text)
-        self._advanced.grid_remove()
+        for column, (title, variable) in enumerate(fields):
+            timing.addWidget(QLabel(title), 0, column)
+            timing.addWidget(self._setting(variable.bind_line(QLineEdit())), 1, column)
+        self.conservative_check = self._setting(self.conservative.bind_check(
+            QCheckBox("Mode conservateur · détecter les petits changements")))
+        timing.addWidget(self.conservative_check, 2, 0, 1, 3)
+        timing.addWidget(self._muted("Un seuil plus bas conserve davantage de changements visuels."), 3, 0, 1, 3)
+        masks = self._section(advanced_layout, "Masquage des informations sensibles")
+        masks.addWidget(self._muted("Une zone par ligne : x, y, largeur, hauteur, depuis le coin supérieur gauche "
+                                    "de la capture. Après l’enregistrement, l’éditeur du guide permet aussi de "
+                                    "masquer une zone à la souris."), 0, 0)
+        self.masks_text = self._setting(QPlainTextEdit())
+        self.masks_text.setFixedHeight(76)
+        self.masks_text.setPlaceholderText("0, 0, 400, 60")
+        masks.addWidget(self.masks_text, 1, 0)
+        left_layout.addWidget(self._advanced)
+        self._advanced.hide()
+        left_layout.addStretch(1)
 
-        right = ttk.Frame(body)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(0, weight=1)
-        preview = ttk.Frame(right, style="Card.TFrame", padding=16)
-        preview.grid(row=0, column=0, sticky="nsew")
-        preview.columnconfigure(0, weight=1)
-        preview.rowconfigure(1, weight=1)
-        ttk.Label(preview, text="Dernière capture", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
-        # The image must not determine the label's requested size.
-        empty_preview = ("L’aperçu apparaîtra après la première étape.\nPendant l’enregistrement, StepWatch se réduit en une petite barre flottante.\n\n"
-                         "Ctrl+Maj+F9 pause/reprise · Ctrl+Maj+F10 note · Ctrl+Maj+F11 arrêt"
-                         + (" (dans toutes les applications)" if sys.platform == "win32" else "")
-                         if self._backend is not None
-                         else "Importez un dossier ShareX ou ouvrez un guide pour le modifier dans l’onglet Guide.")
-        self.preview = tk.Label(preview, text=empty_preview, justify="center",
-                                bg=p["preview"], fg=p["preview_text"], font=(self._ui_font, 10), width=1, height=1)
-        self.preview.grid(row=1, column=0, sticky="nsew")
-        self.preview.bind("<Configure>", self._draw_preview)
-        self.preview.bind("<Map>", self._draw_preview)
+        preview_card = set_role(QFrame(), "card")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(16, 16, 16, 16)
+        preview_layout.addWidget(set_role(QLabel("Dernière capture"), "cardtitle"))
+        self._empty_preview = (
+            "L’aperçu apparaîtra après la première étape.\nPendant l’enregistrement, StepWatch se réduit en une "
+            "petite barre flottante.\n\nCtrl+Maj+F9 pause/reprise · Ctrl+Maj+F10 note · Ctrl+Maj+F11 arrêt"
+            + (" (dans toutes les applications)" if sys.platform == "win32" else "")
+            if self._backend is not None
+            else "Importez un dossier ShareX ou ouvrez un guide pour le modifier dans l’onglet Guide.")
+        self.preview = ImageView(self._empty_preview)
+        preview_layout.addWidget(self.preview, 1)
+        body_layout.addWidget(preview_card, 1)
+        self._tabs.addTab(body, "Enregistrer")
 
-        self._review = SessionReview(self._tabs, choose_session=self._choose_session,
-                                     on_loaded=self._use_session, on_error=self._review_error, font=self._ui_font,
-                                     on_changed=self._guide_changed, export=self._export_from_guide,
-                                     options=lambda: self._prefs.values)
-        self._tabs.add(self._review, text="Guide")
-        self._tabs.bind("<<NotebookTabChanged>>", self._tab_changed)
+        self._review = SessionReview(choose_session=self._choose_session, on_loaded=self._use_session,
+                                     on_error=self._review_error, on_changed=self._guide_changed,
+                                     export=self._export_from_guide, options=lambda: self._prefs.values)
+        self._tabs.addTab(self._review, "Guide")
 
-        log_frame = ttk.Frame(self._tabs, padding=(0, 12, 0, 0))
-        log_frame.rowconfigure(0, weight=1)
-        log_frame.columnconfigure(0, weight=1)
-        self.log = scrolledtext.ScrolledText(log_frame, height=5, state="disabled", wrap="word",
-                                             font=(self._mono_font, 9), relief="flat", bg=p["surface"], fg="#344054",
-                                             padx=12, pady=10, highlightthickness=0)
-        self.log.grid(row=0, column=0, sticky="nsew")
-        self._tabs.add(log_frame, text="Journal")
+        log_page = QWidget()
+        log_layout = QVBoxLayout(log_page)
+        log_layout.setContentsMargins(0, 12, 0, 0)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(1200)
+        log_layout.addWidget(self.log)
+        self._tabs.addTab(log_page, "Journal")
+        self._tabs.currentChanged.connect(self._tab_changed)
 
-        session = ttk.Frame(content, style="Card.TFrame", padding=(12, 8))
-        session.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        session.columnconfigure(0, weight=1)
-        location = ttk.Label(session, textvariable=self.session_text, style="CardMuted.TLabel", width=1)
-        location.grid(row=0, column=0, sticky="ew", padx=(4, 6))
-        location.bind("<Configure>", lambda event: location.configure(wraplength=max(1, event.width - 6)))
-        self.open_button = ttk.Button(session, text="Ouvrir le dossier", command=self._open_session, state="disabled")
-        self.open_button.grid(row=0, column=1, padx=(6, 0))
-        self.export_button = ttk.Button(session, text="Rapport autonome", command=self._export_standalone, state="disabled")
-        self.export_button.grid(row=0, column=2, padx=(6, 0))
+        session = set_role(QFrame(), "card")
+        session_layout = QHBoxLayout(session)
+        session_layout.setContentsMargins(14, 8, 12, 8)
+        location = set_role(self.session_text.bind_label(QLabel()), "muted")
+        location.setWordWrap(True)
+        location.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        session_layout.addWidget(location, 1)
+        self.open_button = QPushButton("Ouvrir le dossier")
+        self.open_button.clicked.connect(self._open_session)
+        self.export_button = QPushButton("Rapport autonome")
+        self.export_button.clicked.connect(self._export_standalone)
+        session_layout.addWidget(self.open_button)
+        session_layout.addWidget(self.export_button)
+        content_layout.addWidget(session)
 
         footer = "Les fenêtres capturées doivent rester visibles. Les masques sont appliqués avant l’enregistrement."
         if self._uses_portal:
             footer = "La source est partagée avec votre accord. Les masques sont appliqués avant l’enregistrement."
         elif self._backend is None:
             footer = "Import ShareX, guides et rapports disponibles. La capture nécessite Windows, X11 ou Wayland."
-        ttk.Label(content, text=footer, style="Muted.TLabel", wraplength=self._px(840)).grid(row=3, column=0, sticky="w", pady=(8, 0))
+        content_layout.addWidget(self._muted(footer))
+        self._status_state = "idle"
         self._set_status_colours("idle")
+        self.log.setStyleSheet(f"font-family: '{self._mono_font}'; color: {PALETTE['log_text']};")
+        self.masks_text.setStyleSheet(f"font-family: '{self._mono_font}';")
+
+    def _build_target_choices(self, selection: QGridLayout) -> None:
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(list(self.SOURCES))
+        self.source.bind_combo(self.source_combo)
+        self.source_combo.activated.connect(lambda _index: self._refresh_targets())
+        selection.addWidget(self._setting(self.source_combo), 0, 0)
+        self.refresh_button = self._setting(QPushButton("Actualiser"))
+        self.refresh_button.clicked.connect(self._refresh_targets)
+        selection.addWidget(self.refresh_button, 0, 1)
+        self.target_combo = self._setting(QComboBox())
+        self.target_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.target_combo.setMinimumContentsLength(20)
+        selection.addWidget(self.target_combo, 1, 0, 1, 2)
+        self.region_frame = QWidget()
+        region = QGridLayout(self.region_frame)
+        region.setContentsMargins(0, 0, 0, 0)
+        for index, label in enumerate(("X", "Y", "Largeur", "Hauteur")):
+            region.addWidget(QLabel(label), 0, index)
+            region.addWidget(self._setting(self.region_values[index].bind_line(QLineEdit())), 1, index)
+        selection.addWidget(self.region_frame, 2, 0, 1, 2)
+        selection.addWidget(self._muted("Coordonnées en pixels physiques ; X et Y peuvent être négatifs."),
+                            3, 0, 1, 2)
+        selection.setColumnStretch(0, 1)
 
     def _toggle_advanced(self) -> None:
         self._show_advanced(not self._advanced_open.get())
 
     def _show_advanced(self, opened: bool) -> None:
         self._advanced_open.set(opened)
-        self._advanced.grid() if opened else self._advanced.grid_remove()
-        self.advanced_button.configure(text=("▾" if opened else "▸") + "  Réglages avancés")
+        self._advanced.setVisible(opened)
+        self.advanced_button.setText(("▾" if opened else "▸") + "  Réglages avancés")
 
     def _set_status_colours(self, state: str) -> None:
+        self._status_state = state
         dot, background, text = STATUS_COLOURS.get(state, STATUS_COLOURS["idle"])
-        for widget in (self._status, self._status_dot, self._status_label):
-            widget.configure(bg=background)
-        self._status_label.configure(fg=text)
-        self._status_dot.itemconfigure(self._status_dot_id, fill=dot)
-
-    def _build_target_choices(self, selection: ttk.LabelFrame) -> None:
-        choice = self._setting(ttk.Combobox(selection, textvariable=self.source, values=self.SOURCES, state="readonly"), "readonly")
-        choice.grid(row=0, column=0, sticky="ew")
-        choice.bind("<<ComboboxSelected>>", lambda _event: self._refresh_targets())
-        self.refresh_button = self._setting(ttk.Button(selection, text="Actualiser", command=self._refresh_targets))
-        self.refresh_button.grid(row=0, column=1, padx=(6, 0))
-        self.target_combo = self._setting(ttk.Combobox(selection, textvariable=self.target, state="readonly"), "readonly")
-        self.target_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-
-        self.region_frame = ttk.Frame(selection, style="Card.TFrame")
-        self.region_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        for index, label in enumerate(("X", "Y", "Largeur", "Hauteur")):
-            self.region_frame.columnconfigure(index, weight=1)
-            ttk.Label(self.region_frame, text=label, style="Card.TLabel").grid(row=0, column=index, sticky="w")
-            self._setting(ttk.Entry(self.region_frame, textvariable=self.region_values[index], width=8)).grid(row=1, column=index, sticky="ew", padx=(0, 5 if index < 3 else 0))
-        ttk.Label(selection, text="Coordonnées en pixels physiques ; X et Y peuvent être négatifs.", style="CardMuted.TLabel", wraplength=self._px(370)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        self._status.setStyleSheet(f"QFrame {{ background: {background}; border-radius: 11px; }}")
+        self._status_label.setStyleSheet(f"font-weight: 700; color: {text}; background: transparent;")
+        self._status_dot.set_colour(dot)
 
     def _write_log(self, message: str, level: int | None = logging.INFO) -> None:
-        """Ajoute une ligne au journal de l’interface et, si level, au journal de diagnostic."""
+        """Ajoute une ligne au journal de l'interface et, si level, au journal de diagnostic."""
         from datetime import datetime
 
         if level is not None:
             LOGGER.log(level, message)
+        self.log.appendPlainText(f"{datetime.now():%H:%M:%S}  {message}")
 
-        self.log.configure(state="normal")
-        self.log.insert("end", f"{datetime.now():%H:%M:%S}  {message}\n")
-        if int(self.log.index("end-1c").split(".")[0]) > 1200:
-            self.log.delete("1.0", "201.0")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+    # ----- Cibles -----------------------------------------------------------------
+
+    def _set_target_message(self, text: str) -> None:
+        self.target_combo.setCurrentIndex(-1)
+        self.target_combo.setPlaceholderText(text)
+
+    def target_text(self) -> str:
+        return self.target_combo.currentText() or self.target_combo.placeholderText()
 
     def _refresh_targets(self) -> None:
         if self._active() or self._backend is None or self._uses_portal:
             return
         source = self.source.get()
         custom = source == "Zone personnalisée"
-        index = self.target_combo.current()
+        index = self.target_combo.currentIndex()
         previous = None
         if source != self._listed_source:
             self._listed_source = source
             self._needs_target_selection = False
         elif 0 <= index < len(self._targets):
             previous = self._targets[index]
-        self.region_frame.grid() if custom else self.region_frame.grid_remove()
-        self.target_combo.configure(state="disabled" if custom else "readonly")
-        self.refresh_button.configure(state="disabled" if custom else "normal")
+        self.region_frame.setVisible(custom)
+        self.target_combo.setEnabled(not custom)
+        self.refresh_button.setEnabled(not custom)
         if custom:
             self._targets = []
-            self.target.set("Coordonnées personnalisées")
+            self.target_combo.clear()
+            self._set_target_message("Coordonnées personnalisées")
             self._update_controls()
             return
         try:
-            # L’énumération des fenêtres est indépendante de celle des moniteurs.
+            # L'énumération des fenêtres est indépendante de celle des moniteurs.
             self._targets = self._backend.list_windows() if source == "Fenêtre" else self._backend.list_monitors()
         except Exception as exc:
             self._targets = []
             self._write_log(f"Énumération impossible : {exc}")
         labels = [f"{index + 1}. {target.label}" for index, target in enumerate(self._targets)]
-        self.target_combo.configure(values=labels)
+        self.target_combo.clear()
+        self.target_combo.addItems(labels)
+        self.target_combo.setCurrentIndex(-1)
         if previous is not None:
             for index, target in enumerate(self._targets):
                 if previous.kind == target.kind and (previous.hwnd == target.hwnd if target.kind == "window"
                                                      else previous.rect == target.rect):
-                    self.target_combo.current(index)
+                    self.target_combo.setCurrentIndex(index)
                     self._needs_target_selection = False
                     break
             else:
                 self._needs_target_selection = True
         elif labels and not self._needs_target_selection:
-            self.target_combo.current(0)
+            self.target_combo.setCurrentIndex(0)
         if not labels:
-            self.target.set("Aucune cible disponible")
+            self._set_target_message("Aucune cible disponible")
             self._write_log("Aucune cible. Actualisez la liste après avoir ouvert une fenêtre visible.")
         elif self._needs_target_selection:
-            self.target.set("Sélectionnez une cible")
+            self._set_target_message("Sélectionnez une cible")
             if previous is not None:
                 self._write_log("La cible sélectionnée a disparu. Choisissez une nouvelle cible.")
         self._update_controls()
 
     def _choose_output(self) -> None:
-        selected = filedialog.askdirectory(parent=self.root, title="Dossier des interventions", initialdir=self.output.get() if Path(self.output.get()).is_dir() else None)
+        current = self.output.get()
+        selected = filedialog.askdirectory(parent=self.root, title="Dossier des interventions",
+                                           initialdir=current if Path(current).is_dir() else None)
         if selected:
             self.output.set(selected)
 
@@ -484,28 +576,29 @@ class StepWatchApp:
             self._review.load(Path(selected))
             self._update_controls()
 
-    def _fill_recent_menu(self, menu: tk.Menu | None = None) -> None:
+    def _fill_recent_menu(self, menu: QMenu | None = None) -> None:
         """Guides récents : dossiers déjà ouverts et interventions du dossier des guides."""
         from datetime import datetime
 
         menu = self._recent_menu if menu is None else menu
-        menu.delete(0, "end")
+        menu.clear()
         remembered = self._prefs.values["recent"]
         entries = recent_guides(self.output.get().strip() or None, remembered)
         if entries:
-            menu.add_command(label="Guides récents", state="disabled")
+            title = menu.addAction("Guides récents")
+            title.setEnabled(False)
             for entry in entries:
                 when = datetime.fromtimestamp(entry.modified).strftime("%d/%m/%Y %H:%M")
-                menu.add_command(label=f"{entry.name}  ·  {when}",
-                                 command=lambda directory=entry.directory: self._open_guide(directory))
-            menu.add_separator()
-        menu.add_command(label="Parcourir…", command=self._choose_session)
+                menu.addAction(f"{entry.name}  ·  {when}",
+                               lambda directory=entry.directory: self._open_guide(directory))
+            menu.addSeparator()
+        menu.addAction("Parcourir…", self._choose_session)
 
     def _open_guide(self, directory: Path) -> None:
         if self._active() or self._background_running() or self._closing:
             return
         self._review.load(Path(directory))
-        self._tabs.select(self._review)
+        self._tabs.setCurrentWidget(self._review)
         self._update_controls()
 
     def _use_session(self, directory: Path) -> None:
@@ -516,7 +609,7 @@ class StepWatchApp:
 
     # ----- Préférences ----------------------------------------------------------
 
-    def _apply_preferences(self) -> None:
+    def _apply_preferences(self, theme: bool = False) -> None:
         values = self._prefs.values
         self.name.set(expand_name(values["name_template"]))
         for variable, key in ((self.output, "output"), (self.interval, "interval"),
@@ -530,31 +623,33 @@ class StepWatchApp:
         if values["mode"] in self.MODES and not self._uses_portal:
             self.mode.set(values["mode"])
         if values["masks"]:
-            self.masks_text.delete("1.0", "end")
-            self.masks_text.insert("1.0", values["masks"])
+            self.masks_text.setPlainText(values["masks"])
         if values["advanced_open"] != self._advanced_open.get():
             self._toggle_advanced()
         geometry = values["geometry"]
-        if geometry:
-            try:
-                width, height = (int(part) for part in geometry.split("+")[0].split("-")[0].split("x"))
-            except ValueError:
-                width = height = 0
-            # Ignore a size saved on a larger screen than the current one.
-            if 0 < width <= self.root.winfo_screenwidth() and 0 < height <= self.root.winfo_screenheight():
-                self.root.geometry(geometry)
+        match = re.fullmatch(r"(\d+)x(\d+)\+?(-?\d+)\+?(-?\d+)", geometry or "")
+        if match:
+            width, height, left, top = (int(part) for part in match.groups())
+            screen = QGuiApplication.primaryScreen()
+            area = screen.availableGeometry() if screen is not None else None
+            # Taille enregistrée sur un écran plus grand que l'actuel : ignorée.
+            if area is not None and 0 < width <= area.width() and 0 < height <= area.height():
+                self.root.resize(width, height)
+                if QGuiApplication.screenAt(QPoint(left + 40, top + 40)) is not None:
+                    self.root.move(left, top)
+        if theme:
+            self.apply_theme()
 
     def _store_preferences(self) -> None:
         values = self._prefs.values
         values.update(output=self.output.get(), interval=self.interval.get(), delay=self.delay.get(),
                       sensitivity=self.sensitivity.get(), conservative=self.conservative.get(),
                       compact=self.compact.get(), source=self.source.get(), mode=self.mode.get(),
-                      masks=self.masks_text.get("1.0", "end-1c"), advanced_open=self._advanced_open.get())
-        try:
-            if not self._withdrawn and self.root.state() == "normal":
-                values["geometry"] = self.root.geometry()
-        except tk.TclError:
-            pass
+                      masks=self.masks_text.toPlainText(), advanced_open=self._advanced_open.get())
+        window = self.root
+        if not self._withdrawn and window.isVisible() and not (window.isMaximized() or window.isMinimized()):
+            frame = window.geometry()
+            values["geometry"] = f"{frame.width()}x{frame.height()}+{frame.x()}+{frame.y()}"
         self._prefs.save()
 
     def _guide_changed(self, message: str) -> None:
@@ -583,10 +678,10 @@ class StepWatchApp:
             return
         if not self._review.busy and self._review.directory != self._session_dir:
             self._review.load(self._session_dir)
-        self._tabs.select(self._review)
+        self._tabs.setCurrentWidget(self._review)
 
-    def _tab_changed(self, _event) -> None:
-        if self._tabs.select() == str(self._review):
+    def _tab_changed(self, _index: int) -> None:
+        if self._tabs.currentWidget() is self._review:
             self._show_review()
 
     @staticmethod
@@ -622,12 +717,12 @@ class StepWatchApp:
                           for variable, name in zip(self.region_values, names)))
             target = CaptureTarget(kind="region", label="Zone personnalisée", rect=rect)
         else:
-            index = self.target_combo.current()
+            index = self.target_combo.currentIndex()
             if index < 0 or index >= len(self._targets):
                 raise ValueError("Sélectionnez une fenêtre ou un moniteur disponible.")
             target = self._targets[index]
         masks = []
-        for line_number, line in enumerate(self.masks_text.get("1.0", "end").splitlines(), 1):
+        for line_number, line in enumerate(self.masks_text.toPlainText().splitlines(), 1):
             if not line.strip():
                 continue
             fields = line.replace(";", ",").split(",")
@@ -651,6 +746,8 @@ class StepWatchApp:
         )
         return target, config
 
+    # ----- Enregistrement -----------------------------------------------------------
+
     def _active(self) -> bool:
         return self._recorder is not None and self._recorder.state in self.ACTIVE_STATES
 
@@ -659,13 +756,14 @@ class StepWatchApp:
             return
         if self._recorder is not None:
             # Derniers événements de la session précédente (erreur de rapport
-            # à l’arrêt, par exemple) : les afficher avant de la remplacer.
+            # à l'arrêt, par exemple) : les afficher avant de la remplacer.
             self._drain(self._recorder.events, None, self._handle_event)
         store = None
         recorder = None
         try:
             if self._backend is None:
-                raise RuntimeError("L’enregistrement est indisponible dans cette session. Vous pouvez importer un dossier ShareX.")
+                raise RuntimeError("L’enregistrement est indisponible dans cette session. "
+                                   "Vous pouvez importer un dossier ShareX.")
             if not self.name.get().strip():
                 raise ValueError("Indiquez un nom d’intervention.")
             output = self._output_dir()
@@ -677,14 +775,12 @@ class StepWatchApp:
             recorder = Recorder(target, config, store, backend_factory=self._backend_factory)
             self._recorder = recorder
             self._review.clear()
-            self._tabs.select(0)
+            self._tabs.setCurrentIndex(0)
             self._use_session(store.directory)
             self.kept.set("0")
             self.ignored.set("0")
             self._last_image = None
-            self._photo = None
-            self._preview_key = None
-            self.preview.configure(image="", text="En attente de la première capture…")
+            self.preview.set_message("En attente de la première capture…")
             recorder.start()
             self._compact_session = self.compact.get()
             self._regions_key = None
@@ -747,16 +843,20 @@ class StepWatchApp:
         if values["auto_standalone"]:
             self._export_when_idle(attempts=100)
         if self._pending_release is not None:
-            # Mise à jour trouvée pendant l’enregistrement : proposée maintenant.
+            # Mise à jour trouvée pendant l'enregistrement : proposée maintenant.
             release, self._pending_release = self._pending_release, None
-            self.root.after(500, lambda: self._show_update(release))
+            self.after(500, lambda: self._show_update(release))
+
+    def after(self, delay_ms: int, callback) -> None:
+        """Appel différé, ignoré une fois l'interface libérée."""
+        QTimer.singleShot(delay_ms, lambda: None if self._disposed else callback())
 
     def _export_when_idle(self, attempts: int) -> None:
         """Rapport autonome automatique, dès que la relecture du guide est terminée."""
         if self._closing or self._disposed or attempts <= 0:
             return
         if self._background_running() or self._session_dir is None:
-            self.root.after(100, lambda: self._export_when_idle(attempts - 1))
+            self.after(100, lambda: self._export_when_idle(attempts - 1))
             return
         self._export_standalone()
 
@@ -776,27 +876,27 @@ class StepWatchApp:
         key = state, busy, self._closing, self._session_dir, self.source.get()
         if key == self._controls_key:
             return
-        self.start_button.configure(state="disabled" if active or busy or self._backend is None else "normal")
-        self.pause_button.configure(state="normal" if state == "recording" and not self._closing else "disabled")
-        self.resume_button.configure(state="normal" if state == "paused" and not self._closing else "disabled")
-        self.stop_button.configure(state="normal" if state in {"starting", "recording", "paused"} and not self._closing else "disabled")
-        self.note_button.configure(state="normal" if state in {"recording", "paused"} and not self._closing else "disabled")
-        self.import_button.configure(state="disabled" if active or busy else "normal")
-        self._review.open_button.configure(state="disabled" if active or busy else "normal")
-        self.open_session_button.configure(state="disabled" if active or busy else "normal")
+        self.start_button.setEnabled(not (active or busy or self._backend is None))
+        self.pause_button.setEnabled(state == "recording" and not self._closing)
+        self.resume_button.setEnabled(state == "paused" and not self._closing)
+        self.stop_button.setEnabled(state in {"starting", "recording", "paused"} and not self._closing)
+        self.note_button.setEnabled(state in {"recording", "paused"} and not self._closing)
+        self.import_button.setEnabled(not (active or busy))
+        self._review.open_button.setEnabled(not (active or busy))
+        self.open_session_button.setEnabled(not (active or busy))
         other_work = self._closing or any(thread is not None and thread.is_alive()
                                           for thread in (self._import_thread, self._export_thread))
         self._review.set_editable(not active and not other_work)
         self._set_status_colours("stopping" if self._closing else state)
-        self.open_button.configure(state="normal" if self._session_dir is not None else "disabled")
+        self.open_button.setEnabled(self._session_dir is not None)
         exportable = self._session_dir is not None and not active and not busy
-        self.export_button.configure(state="normal" if exportable else "disabled")
-        for widget, normal_state in self._settings_widgets:
-            widget.configure(state="disabled" if active or busy else normal_state)
-        if not active and not busy and not self._uses_portal:
+        self.export_button.setEnabled(exportable)
+        for widget in self._settings_widgets:
+            widget.setEnabled(not (active or busy))
+        if not active and not busy and not self._uses_portal and self._backend is not None:
             custom = self.source.get() == "Zone personnalisée"
-            self.target_combo.configure(state="disabled" if custom or self._backend is None else "readonly")
-            self.refresh_button.configure(state="disabled" if custom or self._backend is None else "normal")
+            self.target_combo.setEnabled(not custom)
+            self.refresh_button.setEnabled(not custom)
         if self._closing:
             self.state_text.set("Fermeture en cours · finalisation des fichiers…")
         elif self._import_thread is not None and self._import_thread.is_alive():
@@ -807,19 +907,8 @@ class StepWatchApp:
             self.state_text.set("Choisissez l’écran ou la fenêtre à partager…")
         else:
             self.state_text.set(self.STATE_NAMES.get(state, state))
+        self._update_tray(state)
         self._controls_key = key
-
-    def _draw_preview(self, _event: tk.Event | None = None) -> None:
-        if self._last_image is None or not self.preview.winfo_ismapped():
-            return
-        width, height = max(self.preview.winfo_width() - 12, 1), max(self.preview.winfo_height() - 12, 1)
-        previous = self._preview_key
-        if previous is not None and previous[0] is self._last_image and previous[1:] == (width, height):
-            return  # Même image, même taille : rien à recalculer.
-        preview = preview_image(self._last_image, (width, height))
-        self._photo = ImageTk.PhotoImage(preview, master=self.root)
-        self._preview_key = (self._last_image, width, height)
-        self.preview.configure(image=self._photo, text="")
 
     def _handle_event(self, event: dict) -> None:
         if "kept" in event:
@@ -828,13 +917,13 @@ class StepWatchApp:
             self.ignored.set(str(event["ignored"]))
         if event.get("type") == "saved" and event.get("image") is not None:
             self._last_image = event["image"]
-            self._draw_preview()
+            self.preview.set_image(preview_image(self._last_image, (1600, 1000)))
             if self._prefs.values["sound"]:
-                self.root.bell()
+                QApplication.beep()
         message = event.get("message", "")
         if message:
             if event.get("type") == "ignored" and message.startswith("Variation visuelle ignorée"):
-                LOGGER.debug(message)  # The count already shows routine discarded samples.
+                LOGGER.debug(message)  # Le compteur montre déjà les variations écartées.
                 return
             level = {"error": logging.WARNING, "ignored": logging.DEBUG}.get(event.get("type"), logging.INFO)
             self._write_log(str(message), level=level)
@@ -883,21 +972,11 @@ class StepWatchApp:
         except Exception:
             pass
 
-    def _report_callback_exception(self, kind, value, traceback) -> None:
-        LOGGER.error("Erreur dans un rappel de l’interface", exc_info=(kind, value, traceback))
-        try:
-            self._write_log(f"Erreur interne : {value}. Détails dans le journal de diagnostic.", level=None)
-        except Exception:
-            pass
-
     def _poll(self) -> None:
         if self._disposed:
             return
         try:
-            # Une seule boucle de suivi, même si _poll est appelé directement.
-            if self._poll_id is not None:
-                self.root.after_cancel(self._poll_id)
-            # Ne pas monopoliser Tk si beaucoup d’événements arrivent ensemble.
+            # Ne pas monopoliser l'interface si beaucoup d'événements arrivent ensemble.
             if self._recorder is not None:
                 self._drain(self._recorder.events, 100, self._handle_event)
             self._drain(self._background_events, 30, self._handle_background_event)
@@ -908,122 +987,141 @@ class StepWatchApp:
         except Exception as exc:
             self._report_ui_error(exc)
         finally:
-            # Toujours reprogrammer : sinon l’interface se fige et la file du
+            # Toujours reprogrammer : sinon l'interface se fige et la file du
             # moteur grossit sans fin avec les aperçus des captures.
             if not self._disposed:
                 delay = 100 if self._closing or self._active() or self._background_running() else 300
-                self._poll_id = self.root.after(delay, self._poll)
+                self._timer.start(delay)
 
     # ----- Barre de menus --------------------------------------------------------
 
     def _build_menu(self) -> None:
         """Fichier, Enregistrement, Guide, Affichage, Aide, avec leurs raccourcis."""
-        p = PALETTE
-        options = {"tearoff": False, "font": (self._ui_font, 10), "bg": p["surface"], "fg": p["text"],
-                   "activebackground": p["accent_soft"], "activeforeground": p["accent_text"],
-                   "disabledforeground": p["disabled_text"], "relief": "flat", "bd": 1}
-        self.menubar = tk.Menu(self.root, **options)
-        self.menus: dict[str, tk.Menu] = {}
+        self.menubar = self.root.menuBar()
+        self.menus: dict[str, QMenu] = {}
+        self.actions: dict[tuple[str, str], QAction] = {}
         review = self._review
 
         def guide(action):
             def run():
-                self._tabs.select(review)
+                self._tabs.setCurrentWidget(review)
                 action()
             return run
 
         structure = {
             "Fichier": [
-                ("Ouvrir un guide…", "Ctrl+O", "<Control-o>", self._choose_session),
-                ("Guides récents", None, None, "recent"),
-                ("Importer un dossier ShareX…", "Ctrl+I", "<Control-i>", self._import),
+                ("Ouvrir un guide…", "Ctrl+O", self._choose_session),
+                ("Guides récents", None, "recent"),
+                ("Importer un dossier ShareX…", "Ctrl+I", self._import),
                 None,
-                ("Exporter le rapport autonome", "Ctrl+E", "<Control-e>", self._export_standalone),
-                ("Exporter en Markdown", None, None, lambda: self._export_from_guide("markdown")),
-                ("Ouvrir le dossier du guide", None, None, self._open_session),
+                ("Exporter le rapport autonome", "Ctrl+E", self._export_standalone),
+                ("Exporter en Markdown", None, lambda: self._export_from_guide("markdown")),
+                ("Ouvrir le dossier du guide", None, self._open_session),
                 None,
-                ("Paramètres…", "Ctrl+,", "<Control-comma>", self._open_settings),
+                ("Paramètres…", "Ctrl+,", self._open_settings),
                 None,
-                ("Quitter", "Ctrl+Q", "<Control-q>", self._close),
+                ("Quitter", "Ctrl+Q", self._close),
             ],
             "Enregistrement": [
-                ("Démarrer l’enregistrement", "Ctrl+R", "<Control-r>", self._start),
-                ("Pause / Reprendre", "Ctrl+Maj+F9", None, lambda: self._hotkey("pause")),
-                ("Ajouter une note…", "Ctrl+Maj+F10", None, lambda: self._hotkey("note")),
-                ("Arrêter", "Ctrl+Maj+F11", None, lambda: self._hotkey("stop")),
+                ("Démarrer l’enregistrement", "Ctrl+R", self._start),
+                ("Pause / Reprendre", "Ctrl+Maj+F9", lambda: self._hotkey("pause")),
+                ("Ajouter une note…", "Ctrl+Maj+F10", lambda: self._hotkey("note")),
+                ("Arrêter", "Ctrl+Maj+F11", lambda: self._hotkey("stop")),
                 None,
-                ("Actualiser les cibles", "F5", "<F5>", self._refresh_targets),
-                ("check", "Barre flottante pendant l’enregistrement", self.compact, None),
+                ("Actualiser les cibles", "F5", self._refresh_targets),
+                ("check", "Barre flottante pendant l’enregistrement", self.compact),
             ],
             "Guide": [
-                ("Annuler", "Ctrl+Z", None, guide(review.undo)),
+                ("Annuler", "Ctrl+Z", guide(review.undo)),
                 None,
-                ("Modifier le titre de l’étape", "F2", None, guide(review._focus_title)),
-                ("Monter l’étape", "Ctrl+↑", None, guide(lambda: review._move(-1))),
-                ("Descendre l’étape", "Ctrl+↓", None, guide(lambda: review._move(1))),
-                ("Masquer une zone…", None, None, guide(review._redact)),
-                ("Supprimer l’étape", "Suppr", None, guide(review._delete)),
+                ("Modifier le titre de l’étape", "F2", guide(review._focus_title)),
+                ("Monter l’étape", "Ctrl+↑", guide(lambda: review._move(-1))),
+                ("Descendre l’étape", "Ctrl+↓", guide(lambda: review._move(1))),
+                ("Masquer une zone…", None, guide(review._redact)),
+                ("Supprimer l’étape", "Suppr", guide(review._delete)),
             ],
             "Affichage": [
-                ("Onglet Enregistrer", "Ctrl+1", "<Control-Key-1>", lambda: self._tabs.select(0)),
-                ("Onglet Guide", "Ctrl+2", "<Control-Key-2>", self._show_guide_tab),
-                ("Onglet Journal", "Ctrl+3", "<Control-Key-3>", lambda: self._tabs.select(2)),
+                ("Onglet Enregistrer", "Ctrl+1", lambda: self._tabs.setCurrentIndex(0)),
+                ("Onglet Guide", "Ctrl+2", self._show_guide_tab),
+                ("Onglet Journal", "Ctrl+3", lambda: self._tabs.setCurrentIndex(2)),
                 None,
-                ("check", "Réglages avancés", self._advanced_open,
-                 lambda: self._show_advanced(self._advanced_open.get())),
+                ("check", "Réglages avancés", self._advanced_open),
+                ("theme", "Thème", None),
             ],
             "Aide": [
-                ("Raccourcis clavier", "F1", "<F1>", self._show_shortcuts),
-                ("Documentation en ligne", None, None, lambda: self._open_url(DOCUMENTATION_URL)),
-                ("Signaler un problème", None, None, lambda: self._open_url(ISSUES_URL)),
+                ("Raccourcis clavier", "F1", self._show_shortcuts),
+                ("Documentation en ligne", None, lambda: self._open_url(DOCUMENTATION_URL)),
+                ("Signaler un problème", None, lambda: self._open_url(ISSUES_URL)),
                 None,
-                ("Ouvrir le dossier du journal", None, None, self._open_log_folder),
-                ("Ouvrir le dossier des paramètres", None, None,
-                 lambda: self._open_path(settings_path().parent)),
-                ("Vérifier l’installation", None, None, self._check_installation),
-                ("Rechercher des mises à jour…", None, None, lambda: self.check_updates(manual=True)),
+                ("Ouvrir le dossier du journal", None, self._open_log_folder),
+                ("Ouvrir le dossier des paramètres", None, lambda: self._open_path(settings_path().parent)),
+                ("Vérifier l’installation", None, self._check_installation),
+                ("Rechercher des mises à jour…", None, lambda: self.check_updates(manual=True)),
                 None,
-                ("À propos de StepWatch", None, None, self._show_about),
+                ("À propos de StepWatch", None, self._show_about),
             ],
         }
+        # Raccourcis propres à la fenêtre ; ceux de l'éditeur (Suppr, Ctrl+Z…) et
+        # les raccourcis d'enregistrement sont gérés ailleurs, selon le contexte.
+        window_shortcuts = {"Ctrl+O", "Ctrl+I", "Ctrl+E", "Ctrl+,", "Ctrl+Q", "Ctrl+R", "F5", "Ctrl+1", "Ctrl+2",
+                            "Ctrl+3", "F1"}
         for title, entries in structure.items():
-            menu = tk.Menu(self.menubar, postcommand=self._refresh_menus, **options)
+            menu = self.menubar.addMenu(title)
+            menu.aboutToShow.connect(self._refresh_menus)
             self.menus[title] = menu
-            self.menubar.add_cascade(label=title, menu=menu)
             for entry in entries:
                 if entry is None:
-                    menu.add_separator()
+                    menu.addSeparator()
                 elif entry[0] == "check":
-                    _, label, variable, command = entry
-                    menu.add_checkbutton(label=label, variable=variable, command=command)
-                elif entry[3] == "recent":
-                    recent = tk.Menu(menu, **options)
-                    recent.configure(postcommand=lambda recent=recent: self._fill_recent_menu(recent))
-                    menu.add_cascade(label=entry[0], menu=recent)
+                    _, label, variable = entry
+                    action = QAction(label, menu)
+                    action.setCheckable(True)
+                    variable.bind_check(action)
+                    if variable is self._advanced_open:
+                        action.toggled.connect(self._show_advanced)
+                    menu.addAction(action)
+                    self.actions[(title, label)] = action
+                elif entry[0] == "theme":
+                    themes = menu.addMenu("Thème")
+                    group = QActionGroup(themes)
+                    self._theme_actions = {}
+                    for key, label in (("systeme", "Comme le système"), ("clair", "Clair"), ("sombre", "Sombre")):
+                        action = themes.addAction(label, lambda key=key: self._choose_theme(key))
+                        action.setCheckable(True)
+                        group.addAction(action)
+                        self._theme_actions[key] = action
+                    themes.aboutToShow.connect(
+                        lambda: self._theme_actions[self._prefs.values["theme"]].setChecked(True))
+                elif entry[2] == "recent":
+                    recent = menu.addMenu(entry[0])
+                    recent.aboutToShow.connect(lambda recent=recent: self._fill_recent_menu(recent))
+                    self.menus["Guides récents"] = recent
                 else:
-                    label, accelerator, sequence, command = entry
-                    menu.add_command(label=label, accelerator=accelerator or "", command=command)
-                    if sequence:
-                        self.root.bind_all(sequence, lambda _event, command=command: self._menu_shortcut(command),
-                                           add="+")
-        self.root.configure(menu=self.menubar)
+                    label, accelerator, command = entry
+                    action = QAction(label, menu)
+                    action.triggered.connect(lambda _checked=False, command=command: self._menu_command(command))
+                    if accelerator in window_shortcuts:
+                        action.setShortcut(QKeySequence(accelerator))
+                        action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+                    elif accelerator:
+                        # Affiché seulement : géré par l'éditeur ou les raccourcis d'enregistrement.
+                        action.setText(f"{label}\t{accelerator}")
+                    menu.addAction(action)
+                    self.actions[(title, label)] = action
 
-    def _menu_shortcut(self, command):
-        """Raccourci d’un menu : ignoré pendant la fermeture ou dans une autre fenêtre (dialogue)."""
-        focused = self.root.focus_get()
-        if self._closing or (focused is not None and focused.winfo_toplevel() is not self.root):
-            return None
-        if focused is not None and focused.winfo_class() == "Text":
-            return None  # Ctrl+O, Ctrl+I, Ctrl+E… ont un sens d’édition dans une zone de texte.
-        command()
-        return "break"
+    def action(self, menu: str, label: str) -> QAction:
+        return self.actions[(menu, label)]
+
+    def _menu_command(self, command) -> None:
+        if not self._closing:
+            command()
 
     def _show_guide_tab(self) -> None:
-        self._tabs.select(self._review)
+        self._tabs.setCurrentWidget(self._review)
         self._show_review()
 
     def _refresh_menus(self) -> None:
-        """États des entrées au moment où un menu s’ouvre."""
+        """États des entrées au moment où un menu s'ouvre."""
         state = self._recorder.state if self._recorder is not None else "idle"
         active = state in self.ACTIVE_STATES
         busy = self._closing or self._background_running()
@@ -1033,7 +1131,7 @@ class StepWatchApp:
         has_step = review._can_edit() and position is not None and position < len(review.steps)
 
         def set_state(menu, label, enabled):
-            self.menus[menu].entryconfigure(label, state="normal" if enabled else "disabled")
+            self.actions[(menu, label)].setEnabled(bool(enabled))
 
         for label in ("Ouvrir un guide…", "Importer un dossier ShareX…"):
             set_state("Fichier", label, not active and not busy)
@@ -1057,14 +1155,18 @@ class StepWatchApp:
     def _open_settings(self) -> None:
         if self._closing:
             return
-        self._store_preferences()  # Les valeurs affichées reprennent l’état actuel.
-        dialog = SettingsDialog(self.root, dict(self._prefs.values), font=self._ui_font,
+        self._store_preferences()  # Les valeurs affichées reprennent l'état actuel.
+        dialog = SettingsDialog(self.root, dict(self._prefs.values),
                                 on_apply=self._apply_settings, on_reset=self._reset_settings)
         self._settings_dialog = dialog
-        dialog.grab_set()
+        dialog.open()
+
+    def _choose_theme(self, key: str) -> None:
+        self._prefs.values["theme"] = key
+        self._prefs.save()
+        self.apply_theme()
 
     def _apply_settings(self, values: dict) -> None:
-        old_scale = self._prefs.values["font_scale"]
         for key in SETTINGS_KEYS:
             if key in values:
                 self._prefs.values[key] = values[key]
@@ -1074,15 +1176,15 @@ class StepWatchApp:
         if not self._active():
             self.name.set(expand_name(prefs["name_template"]))
         self._prefs.save()
-        message = "Paramètres enregistrés."
-        if prefs["font_scale"] != old_scale:
-            message += " La nouvelle taille du texte s’appliquera au prochain lancement."
-        self._write_log(message)
+        self.apply_theme()
+        self._sync_tray()
+        self._write_log("Paramètres enregistrés.")
 
     def _reset_settings(self) -> None:
         self._prefs.reset()
-        self._apply_preferences()
+        self._apply_preferences(theme=True)
         self._prefs.save()
+        self._sync_tray()
         self._write_log("Paramètres réinitialisés (les guides récents sont conservés).")
 
     def _open_url(self, url: str) -> None:
@@ -1122,7 +1224,7 @@ class StepWatchApp:
         values = self._prefs.values
         if (self._prefs.persistent and values["check_updates"]
                 and values["last_update_check"] != time.strftime("%Y-%m-%d")):
-            self.root.after(delay_ms, lambda: self.check_updates(manual=False))
+            self.after(delay_ms, lambda: self.check_updates(manual=False))
 
     def check_updates(self, manual: bool = False) -> None:
         if self._closing or (self._update_thread is not None and self._update_thread.is_alive()):
@@ -1166,7 +1268,7 @@ class StepWatchApp:
         if not manual and release.version == self._prefs.values["skipped_version"]:
             return
         if self._active():
-            self._pending_release = release  # Ne pas interrompre l’intervention.
+            self._pending_release = release  # Ne pas interrompre l'intervention.
             return
         self._show_update(release)
 
@@ -1174,14 +1276,15 @@ class StepWatchApp:
         if self._closing:
             return None
         dialog = self._update_dialog
-        if dialog is not None and dialog.winfo_exists():
-            dialog.lift()
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
             return dialog
         from .update_dialog import UpdateDialog
 
-        self._update_dialog = UpdateDialog(self.root, release, updater.detect_installation(), font=self._ui_font,
+        self._update_dialog = UpdateDialog(self.root, release, updater.detect_installation(),
                                            blocked=self._update_blocked, on_skip=self._skip_version,
                                            on_installed=self._update_installed, open_url=self._open_url)
+        self._update_dialog.show()
         return self._update_dialog
 
     def _update_blocked(self) -> str | None:
@@ -1212,7 +1315,8 @@ class StepWatchApp:
     def _show_shortcuts(self) -> None:
         lines = [
             ("Ctrl+R", "Démarrer l’enregistrement"),
-            ("Ctrl+Maj+F9", "Pause / Reprendre" + (" (dans toutes les applications)" if sys.platform == "win32" else "")),
+            ("Ctrl+Maj+F9", "Pause / Reprendre" + (" (dans toutes les applications)"
+                                                   if sys.platform == "win32" else "")),
             ("Ctrl+Maj+F10", "Ajouter une note"),
             ("Ctrl+Maj+F11", "Arrêter l’enregistrement"),
             ("Ctrl+O / Ctrl+I", "Ouvrir un guide / Importer ShareX"),
@@ -1228,29 +1332,74 @@ class StepWatchApp:
                             parent=self.root)
 
     def _show_about(self) -> None:
+        from PySide6 import __version__ as pyside_version
+
         from . import __version__
 
         messagebox.showinfo(
             "À propos de StepWatch",
             f"StepWatch {__version__}\n\nDocumentation locale des interventions, étape par étape.\n"
             "Captures et rapports restent sur ce poste : aucun compte, aucune télémétrie.\n\n"
-            f"Python {sys.version.split()[0]} · Tk {self.root.tk.call('info', 'patchlevel')}\n"
-            "Licence GNU AGPL v3",
+            f"Python {sys.version.split()[0]} · Qt {qVersion()} · PySide6 {pyside_version}\n"
+            "Licence GNU AGPL v3 · Qt et PySide6 sous licence LGPL v3",
             parent=self.root)
 
-    # ----- Barre flottante pendant l’enregistrement ------------------------------
+    # ----- Zone de notification -------------------------------------------------
+
+    def _sync_tray(self) -> None:
+        wanted = self._prefs.values["tray_icon"] and QSystemTrayIcon.isSystemTrayAvailable()
+        if wanted and self._tray is None:
+            tray = QSystemTrayIcon(qicon())
+            menu = QMenu()
+            self._tray_actions = {
+                "show": menu.addAction("Afficher StepWatch", self._show_window),
+                "start": menu.addAction("Démarrer l’enregistrement", self._start),
+                "pause": menu.addAction("Pause / Reprendre", lambda: self._hotkey("pause")),
+                "note": menu.addAction("Ajouter une note…", lambda: self._hotkey("note")),
+                "stop": menu.addAction("Arrêter", lambda: self._hotkey("stop")),
+            }
+            menu.addSeparator()
+            self._tray_actions["quit"] = menu.addAction("Quitter", self._close)
+            tray.setContextMenu(menu)
+            tray.activated.connect(lambda reason: reason == QSystemTrayIcon.ActivationReason.Trigger
+                                   and self._show_window())
+            self._tray_menu = menu
+            self._tray = tray
+            tray.show()
+            self._controls_key = None
+        elif not wanted and self._tray is not None:
+            self._tray.hide()
+            self._tray.deleteLater()
+            self._tray = None
+
+    def _update_tray(self, state: str) -> None:
+        if self._tray is None:
+            return
+        recording = state in {"recording", "paused"} and not self._closing
+        actions = self._tray_actions
+        actions["start"].setEnabled(state not in self.ACTIVE_STATES and self._backend is not None
+                                    and not self._closing and not self._background_running())
+        for name in ("pause", "note", "stop"):
+            actions[name].setEnabled(recording)
+        self._tray.setToolTip(f"StepWatch · {self.state_text.get()}")
+
+    def _show_window(self) -> None:
+        self._withdrawn = False
+        self.root.showNormal()
+        self.root.raise_()
+        self.root.activateWindow()
+
+    # ----- Barre flottante pendant l'enregistrement ------------------------------
 
     def _sync_floating_bar(self) -> None:
         recorder = self._recorder
         state = recorder.state if recorder is not None else "idle"
         if state in {"recording", "paused"} and self._compact_session and self._bar is None and not self._closing:
-            self._bar = FloatingBar(self.root, font=self._ui_font, icon=self._bar_icon,
-                                    on_pause=self._pause, on_resume=self._resume, on_note=self._add_note,
-                                    on_stop=self._stop, on_expand=self._expand_from_bar, scale=self._scale)
-            self._bar.show(self._prefs.values["bar_position"])
-            self._bar.update_idletasks()
+            self._bar = FloatingBar(icon=self._icon_pixmap(20), on_pause=self._pause, on_resume=self._resume,
+                                    on_note=self._add_note, on_stop=self._stop, on_expand=self._expand_from_bar)
+            self._bar.show_at(self._prefs.values["bar_position"])
             self._bar_excluded = exclude_from_capture(self._window_handle(self._bar))
-            self.root.withdraw()
+            self.root.hide()
             self._withdrawn = True
             self._regions_key = None
         if self._bar is not None:
@@ -1261,7 +1410,7 @@ class StepWatchApp:
         if recorder is not None and state in self.ACTIVE_STATES:
             self._send_regions(recorder)
 
-    # ----- Raccourcis pendant l’enregistrement --------------------------------
+    # ----- Raccourcis pendant l'enregistrement --------------------------------
 
     def _sync_hotkeys(self) -> None:
         state = self._recorder.state if self._recorder is not None else "idle"
@@ -1301,47 +1450,53 @@ class StepWatchApp:
 
     def _hide_floating_bar(self) -> None:
         if self._bar is not None:
-            try:
-                self._bar.destroy()
-            except tk.TclError:
-                pass
+            self._bar.close()
+            self._bar.deleteLater()
             self._bar = None
         self._compact_session = False
-        if self._withdrawn:
-            self._withdrawn = False
-            self.root.deiconify()
-            self.root.lift()
+        if self._withdrawn and not self._disposed:
+            self._show_window()
 
     def _expand_from_bar(self) -> None:
         """Rouvre la fenêtre principale ; la barre reste disponible."""
         if self._withdrawn:
-            self._withdrawn = False
-            self.root.deiconify()
-            self.root.lift()
+            self._show_window()
 
     @staticmethod
-    def _window_handle(window: tk.Misc) -> int:
+    def _window_handle(window: QWidget) -> int:
         if sys.platform != "win32":
             return 0
         try:
-            return int(window.wm_frame(), 16)
-        except (tk.TclError, ValueError):
+            return int(window.winId())
+        except (RuntimeError, ValueError, TypeError):
             return 0
+
+    @staticmethod
+    def _native_rect(widget: QWidget) -> Rect | None:
+        """Rectangle d'une fenêtre (cadre compris) en pixels physiques de l'écran."""
+        frame = widget.frameGeometry()
+        if frame.width() <= 1 or frame.height() <= 1:
+            return None
+        screen = widget.screen() or QGuiApplication.primaryScreen()
+        ratio = screen.devicePixelRatio() if screen is not None else 1.0
+        origin = screen.geometry().topLeft() if screen is not None else frame.topLeft()
+        # Qt garde l'origine de chaque écran en pixels natifs et met à l'échelle le reste.
+        left = origin.x() + round((frame.x() - origin.x()) * ratio)
+        top = origin.y() + round((frame.y() - origin.y()) * ratio)
+        return Rect(left, top, round(frame.width() * ratio), round(frame.height() * ratio))
 
     def _own_regions(self) -> tuple[list[Rect], list[Rect]]:
         """Rectangles écran de StepWatch : clics ignorés, et parties à masquer."""
         regions, masked = [], []
         windows = []
-        if self._bar is not None and self._bar.winfo_ismapped():
-            windows.append((self._bar, 0, 0, not self._bar_excluded))
-        if not self._withdrawn and self.root.winfo_ismapped():
-            # Marge pour la barre de titre et les bordures du gestionnaire de fenêtres.
-            windows.append((self.root, self._px(8), self._px(40), True))
-        for window, side, top, mask in windows:
-            width, height = window.winfo_width(), window.winfo_height()
-            if width <= 1 or height <= 1:
+        if self._bar is not None and self._bar.isVisible():
+            windows.append((self._bar, not self._bar_excluded))
+        if not self._withdrawn and self.root.isVisible() and not self.root.isMinimized():
+            windows.append((self.root, True))
+        for window, mask in windows:
+            rect = self._native_rect(window)
+            if rect is None:
                 continue
-            rect = Rect(window.winfo_rootx() - side, window.winfo_rooty() - top, width + 2 * side, height + top + side)
             regions.append(rect)
             if mask and not self._uses_portal:
                 masked.append(rect)
@@ -1356,6 +1511,8 @@ class StepWatchApp:
         if key != self._regions_key:
             self._regions_key = key
             setter(regions, masked)
+
+    # ----- Import, export, dossiers ---------------------------------------------
 
     def _import(self) -> None:
         if self._active() or self._closing or self._background_running():
@@ -1388,9 +1545,9 @@ class StepWatchApp:
             return
         directory = self._session_dir
         recorder = self._recorder
-        # A final report flush may have failed after PNGs were safely written.
-        # Retry the matching session's in-memory steps before reading steps.json,
-        # rather than exporting an apparently complete but stale report.
+        # Un dernier enregistrement du rapport a pu échouer après l'écriture
+        # des PNG : réessayer avec les étapes en mémoire de cette session
+        # plutôt que d'exporter un rapport apparemment complet mais périmé.
         store = (recorder.store if recorder is not None
                  and recorder.store.directory == directory else None)
         events = self._background_events
@@ -1428,8 +1585,10 @@ class StepWatchApp:
         except OSError as exc:
             self._write_log(f"Ouverture du dossier impossible : {exc}")
 
+    # ----- Arrêt -----------------------------------------------------------------
+
     def shutdown(self, timeout: float = 5) -> bool:
-        """Arrête les travailleurs avant de libérer Tk, sans les forcer."""
+        """Arrête les traitements avant de libérer Qt, sans les forcer."""
         deadline = time.monotonic() + max(0, timeout)
         complete = True
         if self._recorder is not None:
@@ -1440,7 +1599,7 @@ class StepWatchApp:
                 try:
                     self._write_log(f"Arrêt incomplet : {exc}. Le processus peut rester actif.", level=None)
                 except Exception:
-                    pass  # La fenêtre peut déjà avoir été détruite.
+                    pass
                 complete = False
             else:
                 if not stopped:
@@ -1452,72 +1611,61 @@ class StepWatchApp:
                     except Exception:
                         pass
                     complete = False
-        for worker in (getattr(self, "_import_thread", None), getattr(self, "_export_thread", None)):
+        for worker in (self._import_thread, self._export_thread):
             if worker is not None and worker is not threading.current_thread() and worker.is_alive():
                 worker.join(timeout=max(0, deadline - time.monotonic()))
                 if worker.is_alive():
                     complete = False
-                    LOGGER.warning("Le traitement %s est encore actif ; les ressources Tk sont conservées.", worker.name)
-        review = getattr(self, "_review", None)
-        if review is not None and not review.shutdown(max(0, deadline - time.monotonic())):
+                    LOGGER.warning("Le traitement %s est encore actif ; l’interface est conservée.", worker.name)
+        if not self._review.shutdown(max(0, deadline - time.monotonic())):
             complete = False
             LOGGER.warning("La lecture de la capture est encore active.")
         return complete
 
     def dispose(self) -> None:
-        """Libère Tk sur son thread, après l’arrêt des travailleurs.
-
-        Supprimer la méthode liée restaure celle de la classe Tk. Réaffecter
-        une méthode liée à root créerait un autre cycle. Sans cette rupture,
-        des StringVar/Tk peuvent être détruits plus tard par le GC d’un worker
-        et provoquer Tcl_AsyncDelete sous Tk 8.6.
-        """
-        if getattr(self, "_disposed", False):
+        """Libère l'interface sur son thread, après l'arrêt des traitements."""
+        if self._disposed:
             return
-        if threading.get_ident() != getattr(self, "_ui_thread", threading.get_ident()):
-            raise RuntimeError("Les ressources Tk doivent être libérées sur le thread de l’interface.")
-        hotkeys = getattr(self, "_hotkeys", None)
-        if hotkeys is not None:
-            hotkeys.stop()
-        bar = getattr(self, "_bar", None)
-        if bar is not None:
-            try:
-                bar.destroy()
-            except tk.TclError:
-                pass
+        if threading.get_ident() != self._ui_thread:
+            raise RuntimeError("L’interface doit être libérée sur son thread.")
+        if self._hotkeys is not None:
+            self._hotkeys.stop()
+        if self._bar is not None:
+            self._bar.close()
+            self._bar.deleteLater()
             self._bar = None
-        review = getattr(self, "_review", None)
-        if review is not None and not review.shutdown():
+        if not self._review.shutdown():
             raise RuntimeError("La lecture de la capture est encore active.")
-        callback = self.root.__dict__.get("report_callback_exception")
-        if getattr(callback, "__self__", None) is self:
-            del self.root.report_callback_exception
         if self._backend is not None:
             try:
                 self._backend.close()
             except Exception:
                 LOGGER.exception("Fermeture des ressources de sélection impossible")
-        if self._poll_id is not None:
-            try:
-                self.root.after_cancel(self._poll_id)
-            except tk.TclError:
-                pass  # Une fermeture externe peut déjà avoir détruit les widgets.
-            self._poll_id = None
-        try:
-            exists = self.root.winfo_exists()
-        except tk.TclError:
-            exists = False
-        if exists:
-            self.root.destroy()
-        self._photo = None
-        self._preview_key = None
-        self._last_image = None
+        self._timer.stop()
         self._disposed = True
+        if self._tray is not None:
+            self._tray.hide()
+            self._tray.deleteLater()
+            self._tray = None
+        for dialog in (self._settings_dialog, self._update_dialog):
+            if dialog is not None:
+                try:
+                    dialog.close()
+                except RuntimeError:
+                    pass
+        self.root.allow_close = True
+        self.root.close()
+        self.root.deleteLater()
+        self._last_image = None
+        if self.quit_on_dispose:
+            self.qapp.quit()
 
     def _close(self) -> None:
-        if self._closing:
+        if self._closing or self._disposed:
             return
-        if self._active() and not messagebox.askyesno("Fermer StepWatch", "Arrêter l’intervention et finaliser le rapport avant de fermer ?", parent=self.root):
+        if self._active() and not messagebox.askyesno(
+                "Fermer StepWatch", "Arrêter l’intervention et finaliser le rapport avant de fermer ?",
+                parent=self.root):
             return
         self._closing = True
         try:
@@ -1537,8 +1685,7 @@ class StepWatchApp:
             self.dispose()
             retry = False
         except Exception as exc:
-            # A transient stop/report/display error must not strand the closing
-            # latch with every control disabled and no future close attempt.
+            # Une erreur passagère ne doit pas bloquer la fermeture : nouvelle tentative.
             message = str(exc)
             if message != self._close_error:
                 self._close_error = message
@@ -1548,38 +1695,31 @@ class StepWatchApp:
                 except Exception:
                     pass
         finally:
-            if retry:
-                try:
-                    self.root.after(100, self._finish_close)
-                except tk.TclError:
-                    # The main loop has gone away; run_app's finally still
-                    # requests recorder shutdown and reports a timeout.
-                    LOGGER.warning("La fenêtre a disparu avant la fin de la fermeture.")
+            if retry and not self._disposed:
+                QTimer.singleShot(100, self._finish_close)
+
+
+def _log_unhandled(kind, value, traceback) -> None:
+    """Sans console (exécutable Windows), une erreur d'un rappel Qt serait perdue."""
+    LOGGER.error("Erreur dans un rappel de l’interface", exc_info=(kind, value, traceback))
 
 
 def run_app(log_path: Path | None = None) -> None:
-    root = tk.Tk(className=WINDOW_CLASS)
+    qapp = application()
+    previous_hook = sys.excepthook
+    sys.excepthook = _log_unhandled
     app = None
     try:
-        app = StepWatchApp(root, log_path, preferences=Preferences())
+        app = StepWatchApp(log_path, preferences=Preferences())
+        app.quit_on_dispose = True
+        app.root.show()
         app.schedule_update_check()
-        root.mainloop()
+        qapp.exec()
     finally:
-        # Ctrl+C dans la console ou exception sortie de la boucle Tk : sans
-        # cet arrêt, le thread de capture (non démon) continuait d’enregistrer
-        # sans interface et empêchait le processus de se terminer.
-        try:
-            if app is not None:
-                if app.shutdown():
-                    app.dispose()
-            else:
-                # Construction interrompue : le callback peut déjà référencer
-                # l’instance partiellement construite.
-                root.__dict__.pop("report_callback_exception", None)
-                root.destroy()
-        finally:
-            # Les wrappers Tk restants sont collectés sur leur thread propriétaire,
-            # après retrait des références locales, avant tout futur worker.
-            app = None
-            root = None
-            gc.collect()
+        sys.excepthook = previous_hook
+        # Ctrl+C ou exception sortie de la boucle Qt : sans cet arrêt, le
+        # thread de capture continuait d'enregistrer sans interface.
+        if app is not None and not app._disposed:
+            if app.shutdown():
+                app.quit_on_dispose = False
+                app.dispose()

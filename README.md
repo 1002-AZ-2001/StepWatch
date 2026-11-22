@@ -4,7 +4,7 @@
 
 StepWatch documente une intervention informatique avec des captures automatiques, des notes et un rapport consultable hors ligne. Il s'installe sur le poste du technicien pour suivre une intervention locale ou une session de télémaintenance.
 
-Pendant l'enregistrement, StepWatch se réduit en une petite barre flottante. Ensuite, l'onglet **Guide** sert d'éditeur : titres et descriptions des étapes, ordre, suppression, masquage d'une zone oubliée, puis export HTML autonome ou Markdown. Les captures et les rapports restent sur le poste.
+L'interface est en Qt : thème clair ou sombre, affichage net sur les écrans haute résolution, icône dans la zone de notification et Wayland natif. Pendant l'enregistrement, StepWatch se réduit en une petite barre flottante. Ensuite, l'onglet **Guide** sert d'éditeur : titres et descriptions des étapes, ordre, suppression, masquage d'une zone oubliée, puis export HTML autonome ou Markdown. Les captures et les rapports restent sur le poste.
 
 [Télécharger la dernière version](https://github.com/1002-AZ-2001/StepWatch/releases/latest) · [Enregistrer une intervention](#enregistrer-une-intervention)
 
@@ -12,7 +12,7 @@ Pendant l'enregistrement, StepWatch se réduit en une petite barre flottante. En
 | --- | --- |
 | Windows 10/11 | Clics locaux et changements visuels d'une fenêtre, d'un moniteur ou d'une zone. |
 | Linux X11 | Clics locaux et changements visuels d'une fenêtre visible, d'un moniteur ou d'une zone. |
-| Linux Wayland | Changements visuels de l'écran ou de la fenêtre partagée dans le portail du bureau. L'interface s'affiche via XWayland. [Composants Wayland](docs/distribution.md#wayland) |
+| Linux Wayland | Changements visuels de l'écran ou de la fenêtre partagée dans le portail du bureau. L'interface passe par XWayland s'il est installé (barre flottante au premier plan), sinon elle s'affiche en Wayland natif. [Composants Wayland](docs/distribution.md#wayland) |
 
 ![Éditeur de guide : titre du guide, liste des étapes, titre et description de l'étape sélectionnée](docs/stepwatch.png)
 
@@ -42,14 +42,14 @@ stepwatch --self-test
 
 ### Depuis les sources, sous Windows
 
-Il faut Windows 10/11 et Python 3.11 ou ultérieur (3.12 recommandé), installé avec Tcl/Tk et pip. Depuis le dossier du dépôt, dans PowerShell :
+Il faut Windows 10/11 et Python 3.11 ou ultérieur (3.12 recommandé), avec pip. Depuis le dossier du dépôt, dans PowerShell :
 
 ```powershell
 .\scripts\install.ps1
 .\scripts\launch.ps1
 ```
 
-`install.ps1` cherche Python 3.12, 3.13 puis 3.11 avec le lanceur `py`, vérifie Tcl/Tk, puis crée `.venv` avec les versions de `requirements.txt`. Pour forcer un interpréteur : `.\scripts\install.ps1 -Python "C:\Python312\python.exe"`. Aucun script ne modifie la politique d'exécution PowerShell. Si elle bloque les scripts, utilisez directement :
+`install.ps1` cherche Python 3.12, 3.13 puis 3.11 avec le lanceur `py`, puis crée `.venv` avec les versions de `requirements.txt`. Pour forcer un interpréteur : `.\scripts\install.ps1 -Python "C:\Python312\python.exe"`. Aucun script ne modifie la politique d'exécution PowerShell. Si elle bloque les scripts, utilisez directement :
 
 ```powershell
 py -3.12 -m venv .venv
@@ -59,7 +59,7 @@ py -3.12 -m venv .venv
 
 ### Depuis les sources, sous Linux
 
-Utilisez Python 3.11 ou ultérieur avec venv et Tkinter. En session Wayland, installez aussi les composants de capture du bureau. [Guide de distribution Linux](docs/distribution.md#linux--debian-ubuntu-et-arch-linux)
+Utilisez Python 3.11 ou ultérieur avec venv. pip installe Qt (PySide6) ; sous X11, Qt demande aussi les bibliothèques xcb du système (Debian et Ubuntu : `libxcb-cursor0`, `libxkbcommon-x11-0`…). En session Wayland, installez aussi les composants de capture du bureau. [Guide de distribution Linux](docs/distribution.md#linux--debian-ubuntu-et-arch-linux)
 
 ```bash
 python3 -m venv .venv
@@ -123,7 +123,7 @@ Sous Windows, les trois raccourcis d'enregistrement fonctionnent dans toutes les
 | **Fichier** | Ouvrir un guide (Ctrl+O), guides récents, importer ShareX (Ctrl+I), exporter le rapport autonome (Ctrl+E) ou le Markdown, ouvrir le dossier du guide, **Paramètres…** (Ctrl+,), quitter (Ctrl+Q). |
 | **Enregistrement** | Démarrer (Ctrl+R), pause/reprise, note, arrêt, actualiser les cibles (F5), barre flottante. |
 | **Guide** | Annuler, modifier le titre, monter, descendre, masquer une zone, supprimer l'étape. |
-| **Affichage** | Onglets Enregistrer, Guide et Journal (Ctrl+1, 2, 3), réglages avancés. |
+| **Affichage** | Onglets Enregistrer, Guide et Journal (Ctrl+1, 2, 3), réglages avancés, thème (comme le système, clair, sombre). |
 | **Aide** | Raccourcis clavier (F1), documentation en ligne, signaler un problème, dossiers du journal et des paramètres, vérifier l'installation, **rechercher des mises à jour**, à propos. |
 
 Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) sont grisées. La documentation en ligne et le signalement d'un problème ouvrent votre navigateur sur GitHub.
@@ -137,11 +137,17 @@ Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) son
 | Général | Nom proposé pour un nouveau guide, avec `{date}` et `{heure}` (par exemple « Poste {date} ») ; dossier des guides ; recherche des mises à jour au démarrage. |
 | Enregistrement | Barre flottante et sa position (en bas ou en haut de l'écran) ; raccourcis globaux sous Windows ; signal sonore à chaque étape. |
 | Guide et rapports | Ouvrir l'onglet Guide à l'arrêt ; créer le rapport autonome automatiquement à l'arrêt ; confirmer une suppression ; conserver ou effacer la capture d'une étape supprimée. |
-| Interface | Taille du texte (90 à 130 %, au prochain lancement) ; réglages avancés ouverts au démarrage. |
+| Interface | Thème (comme le système, clair, sombre) et taille du texte (90 à 130 %), appliqués immédiatement ; réglages avancés ouverts au démarrage ; icône dans la zone de notification. |
 
 **Réinitialiser** revient aux valeurs par défaut en gardant la liste des guides récents. Si vous choisissez d'effacer la capture d'une étape supprimée, StepWatch demande toujours confirmation, et cette suppression ne peut pas être annulée.
 
 StepWatch retient aussi d'un lancement à l'autre la cible, le mode, les réglages avancés, les masques, la taille de la fenêtre et les guides récents. Le fichier `settings.json` reste sur le poste : `%APPDATA%\StepWatch` sous Windows, `~/.config/stepwatch` sous Linux. Supprimez-le pour revenir aux réglages par défaut. Une seule fenêtre StepWatch peut être ouverte à la fois : un second lancement affiche un message et s'arrête.
+
+## Thème sombre et zone de notification
+
+![Éditeur de guide en thème sombre](docs/sombre.png)
+
+Le thème suit celui du système par défaut ; **Affichage › Thème** ou **Paramètres › Interface** le fixent en clair ou en sombre. L'icône de StepWatch dans la zone de notification (barre des tâches de Windows, KDE, GNOME avec l'extension AppIndicator) donne accès à **Démarrer l'enregistrement**, **Pause / Reprendre**, **Ajouter une note**, **Arrêter** et **Quitter** sans rouvrir la fenêtre. Elle se désactive dans **Paramètres › Interface**.
 
 ## Mises à jour automatiques
 
@@ -210,6 +216,6 @@ DISPLAY=:99 STEPWATCH_GUI_TESTS=1 .venv/bin/python -m unittest discover -s tests
 
 Les images du README montrent une session et un rapport de démonstration avec des données synthétiques, sous Linux. La barre flottante, l'éditeur de guide et la séparation entre capture et relecture s'inspirent d'[OpenSteps](https://github.com/ebanez8/openstep) (licence MIT) ; aucun code n'en est repris.
 
-Licence : [GNU AGPL v3](LICENSE).
+Licence : [GNU AGPL v3](LICENSE). L'interface utilise [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/), sous licence LGPL v3 : les paquets embarquent ses bibliothèques sans les modifier.
 
 Références : [Enregistreur d'actions déprécié](https://www.neowin.net/news/microsoft-deprecates-even-more-windows-features-steps-recorder-gets-the-axe/), [hooks souris bas niveau](https://learn.microsoft.com/windows/win32/winmsg/lowlevelmouseproc), [mss](https://python-mss.readthedocs.io/), [pynput](https://pynput.readthedocs.io/), [Pillow](https://pillow.readthedocs.io/).

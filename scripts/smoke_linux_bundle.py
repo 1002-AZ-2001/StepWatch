@@ -25,6 +25,10 @@ class ClientMessage(C.Structure):
                 ("format", C.c_int), ("data", MessageData)]
 
 
+class ClassHint(C.Structure):
+    _fields_ = [("res_name", C.c_void_p), ("res_class", C.c_void_p)]
+
+
 class XEvent(C.Union):
     _fields_ = [("client", ClientMessage), ("padding", C.c_long * 24)]
 
@@ -42,7 +46,7 @@ def main():
         "XDefaultRootWindow": ([C.c_void_p], C.c_ulong),
         "XQueryTree": ([C.c_void_p, C.c_ulong, C.POINTER(C.c_ulong), C.POINTER(C.c_ulong),
                         C.POINTER(C.POINTER(C.c_ulong)), C.POINTER(C.c_uint)], C.c_int),
-        "XFetchName": ([C.c_void_p, C.c_ulong, C.POINTER(C.c_void_p)], C.c_int),
+        "XGetClassHint": ([C.c_void_p, C.c_ulong, C.POINTER(ClassHint)], C.c_int),
         "XFree": ([C.c_void_p], C.c_int),
         "XInternAtom": ([C.c_void_p, C.c_char_p, C.c_int], C.c_ulong),
         "XSendEvent": ([C.c_void_p, C.c_ulong, C.c_int, C.c_long, C.POINTER(XEvent)], C.c_int),
@@ -57,14 +61,18 @@ def main():
         raise RuntimeError("Impossible d’ouvrir l’affichage de test.")
 
     def windows(parent, depth=0):
+        # Fenêtre principale Qt : classe X11 « stepwatch » (le titre est en UTF-8,
+        # et Qt crée aussi une fenêtre « leader » invisible nommée StepWatch).
         result = set()
-        name = C.c_void_p()
-        if x11.XFetchName(display, parent, C.byref(name)) and name.value:
+        hint = ClassHint()
+        if x11.XGetClassHint(display, parent, C.byref(hint)):
             try:
-                if C.string_at(name).startswith(b"StepWatch"):
+                if hint.res_class and C.string_at(hint.res_class) == b"stepwatch":
                     result.add(parent)
             finally:
-                x11.XFree(name)
+                for value in (hint.res_name, hint.res_class):
+                    if value:
+                        x11.XFree(value)
         if depth >= 5:
             return result
         root, owner, count = C.c_ulong(), C.c_ulong(), C.c_uint()

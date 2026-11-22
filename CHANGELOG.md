@@ -4,6 +4,23 @@
 
 Rien pour l'instant.
 
+## 1.0.0 — 2026-11-22
+
+Nouvelle interface Qt.
+
+- **Interface réécrite avec Qt (PySide6 6.12, licence LGPL v3)**, en remplacement de Tkinter. Mêmes fonctions, mêmes raccourcis et mêmes préférences : `settings.json` est repris tel quel.
+- **Wayland natif** : sans XWayland, StepWatch s'ouvre maintenant au lieu de refuser de démarrer. Avec XWayland, il passe par lui pour que la barre flottante reste au premier plan, à la position choisie. `STEPWATCH_WAYLAND=natif` force le Wayland natif.
+- **Thème clair, sombre ou comme le système** (Affichage › Thème, Paramètres › Interface). Le thème et la taille du texte s'appliquent sans redémarrer.
+- **Icône dans la zone de notification** : démarrer, pause/reprise, note, arrêt, quitter. Désactivable dans Paramètres › Interface.
+- **Mise à l'échelle par Qt** sur les écrans haute résolution. Les zones de StepWatch exclues des captures sont converties en pixels physiques ; le cas de plusieurs écrans à des échelles différentes reste à vérifier sur un vrai poste (étape 16 de la validation).
+- **Dialogues standard en français** (traduction Qt), coches dessinées dans les cases, menus et listes plus lisibles.
+- **Éditeur de guide** : une modification reste possible pendant le chargement d'un aperçu.
+- **Paquets Linux** :
+  - greffons Qt inutiles retirés (GTK, eglfs, VNC…), ainsi que les bibliothèques devenues orphelines ;
+  - bibliothèques X11, Wayland, OpenGL, GLib, D-Bus et de polices fournies par le système ;
+  - paquet `.deb` de 39 Mo au lieu de 27 Mo avec Tk.
+- **Tests** : les tests de l'interface tournent hors écran (Qt « offscreen ») ; la CI vérifie l'auto-test sous X11, sous Wayland avec XWayland et en Wayland natif.
+
 ## 0.10.0 — 2026-11-22
 
 Mises à jour automatiques.

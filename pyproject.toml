@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stepwatch"
-version = "0.10.0"
+version = "1.0.0"
 description = "Documentation visuelle locale des interventions informatiques"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "Pillow==13.0.0",
+    "PySide6-Essentials==6.12.0",
     "mss==10.2.0",
     "pynput==1.8.2; sys_platform == 'win32'",
     "python-xlib==0.33; sys_platform == 'linux'",
@@ -20,6 +21,9 @@ stepwatch = "stepwatch.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["stepwatch*"]
+
+[tool.setuptools.package-data]
+stepwatch = ["assets/*.svg"]
 
 [tool.ruff]
 target-version = "py311"

@@ -31,8 +31,6 @@ SHORTCUTS = (
     ("stop", MOD_CONTROL | MOD_SHIFT, VK_F11, "Ctrl+Maj+F11"),
 )
 LABELS = {action: label for action, _, _, label in SHORTCUTS}
-#: Same combinations as Tk sequences, for the StepWatch windows themselves.
-TK_SEQUENCES = {"pause": "<Control-Shift-F9>", "note": "<Control-Shift-F10>", "stop": "<Control-Shift-F11>"}
 
 
 class Win32HotkeyApi:

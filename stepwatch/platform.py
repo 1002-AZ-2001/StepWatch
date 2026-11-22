@@ -37,11 +37,14 @@ def capture_backend_factory(platform: str | None = None,
     environ = os.environ if environ is None else environ
     if platform == "win32":
         return WindowsBackend
-    if not platform.startswith("linux") or not environ.get("DISPLAY"):
+    if not platform.startswith("linux"):
         return None
-    if session_type(environ) == "wayland":
+    if session_type(environ) == "wayland" and (environ.get("WAYLAND_DISPLAY") or environ.get("DISPLAY")):
+        # Portail ScreenCast : ne dépend pas de XWayland.
         from .wayland import WaylandBackend
         return WaylandBackend
+    if not environ.get("DISPLAY"):
+        return None
     from .x11 import X11Backend
     return X11Backend
 

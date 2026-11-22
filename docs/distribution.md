@@ -82,7 +82,7 @@ sudo pacman -S --needed xorg-xwayland pipewire xdg-desktop-portal \
   python-gobject gstreamer gst-plugins-base gst-plugin-pipewire
 ```
 
-L'interface Tk s'affiche via XWayland. Le sélecteur du bureau et le flux de capture utilisent la session Wayland. Wayland réserve l'observation des clics globaux au compositeur, donc StepWatch propose le mode changements visuels sans marqueur de clic. L'import ShareX et les rapports fonctionnent avec les seules dépendances d'affichage.
+L'interface Qt passe par XWayland quand il est installé : la barre flottante peut alors rester au premier plan, à la position choisie. Sans XWayland, elle s'affiche en Wayland natif (le compositeur place alors la barre). `STEPWATCH_WAYLAND=natif` force le Wayland natif ; `QT_QPA_PLATFORM` reste prioritaire. Le sélecteur du bureau et le flux de capture utilisent la session Wayland. Wayland réserve l'observation des clics globaux au compositeur, donc StepWatch propose le mode changements visuels sans marqueur de clic. L'import ShareX et les rapports fonctionnent avec les seules dépendances d'affichage.
 
 ## Construire depuis les sources
 
@@ -95,7 +95,7 @@ La compilation doit se faire sur Windows, avec la même architecture que les pos
 .\scripts\build.ps1 -SingleFile
 ```
 
-Le script installe `requirements-dev.txt`, exécute les tests, puis appelle PyInstaller. Il embarque `scripts/StepWatch.manifest` pour déclarer la gestion DPI par moniteur (`PerMonitorV2`, puis `PerMonitor`) dès le lancement, avant l'initialisation de Python et de Tk. Il produit :
+Le script installe `requirements-dev.txt`, exécute les tests, puis appelle PyInstaller. Il embarque `scripts/StepWatch.manifest` pour déclarer la gestion DPI par moniteur (`PerMonitorV2`, puis `PerMonitor`) dès le lancement, avant l'initialisation de Python et de Qt. Il produit :
 
 - `dist\StepWatch\` : distribution portable, à distribuer **en entier** ;
 - `dist\StepWatch-singlefile.exe` : exécutable unique, seulement avec `-SingleFile`.
@@ -104,7 +104,7 @@ Ce script ne fournit ni installeur MSI, ni signature de code, ni validation anti
 
 ### Paquets Debian et Arch Linux
 
-Utilisez Ubuntu 22.04 amd64 pour retrouver la compatibilité de la CI. Il faut Python 3.11 ou ultérieur avec Tkinter, `dpkg-deb` et les dépendances de `requirements-dev.txt` :
+Utilisez Ubuntu 22.04 amd64 pour retrouver la compatibilité de la CI. Il faut Python 3.11 ou ultérieur, `dpkg-deb`, `readelf` (paquet `binutils`) et les dépendances de `requirements-dev.txt`. Le script retire du paquet les greffons Qt inutiles (GTK, eglfs, VNC…) et les bibliothèques devenues orphelines ; les bibliothèques X11, Wayland, OpenGL, GLib, D-Bus et de polices viennent du système (dépendances du paquet) :
 
 ```bash
 python3.12 -m venv .venv

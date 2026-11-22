@@ -3,122 +3,156 @@
 from __future__ import annotations
 
 import sys
-import tkinter as tk
-from tkinter import filedialog, ttk
 from typing import Any, Callable
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QTabWidget, QVBoxLayout, QWidget)
+
+from .qtcompat import Value, filedialog
 from .settings import CHOICES, expand_name
-from .theme import PALETTE
+from .theme import set_role
 
 BAR_POSITIONS = {"bas": "En bas de l’écran", "haut": "En haut de l’écran"}
+THEME_LABELS = {"systeme": "Comme le système", "clair": "Clair", "sombre": "Sombre"}
 
 
-class SettingsDialog(tk.Toplevel):
-    """Edit a copy of the preferences; ``on_apply`` receives the new values."""
+class SettingsDialog(QDialog):
+    """Modifie une copie des préférences ; ``on_apply`` reçoit les nouvelles valeurs."""
 
-    def __init__(self, parent: tk.Misc, values: dict[str, Any], *, font: str,
+    def __init__(self, parent: QWidget, values: dict[str, Any], *,
                  on_apply: Callable[[dict[str, Any]], None], on_reset: Callable[[], None]):
         super().__init__(parent)
-        p = PALETTE
-        self.title("Paramètres de StepWatch")
-        self.configure(bg=p["bg"])
-        self.transient(parent.winfo_toplevel())
-        self.resizable(False, False)
+        self.setWindowTitle("Paramètres de StepWatch")
+        self.setModal(True)
         self._on_apply, self._on_reset = on_apply, on_reset
-        self.vars: dict[str, tk.Variable] = {}
+        self.vars: dict[str, Value] = {}
         for key, value in values.items():
-            if isinstance(value, bool):
-                self.vars[key] = tk.BooleanVar(master=self, value=value)
-            elif isinstance(value, (str, int)):
-                self.vars[key] = tk.StringVar(master=self, value=str(value))
+            if isinstance(value, (bool, str, int)):
+                self.vars[key] = Value(value if isinstance(value, bool) else str(value))
         self.vars["bar_position"].set(BAR_POSITIONS.get(values["bar_position"], BAR_POSITIONS["bas"]))
         self.vars["font_scale"].set(f"{values['font_scale']} %")
+        self.vars["theme"].set(THEME_LABELS.get(values["theme"], THEME_LABELS["systeme"]))
         self._initial_scale = values["font_scale"]
 
-        frame = ttk.Frame(self, padding=14)
-        frame.pack(fill="both", expand=True)
-        tabs = ttk.Notebook(frame)
-        tabs.pack(fill="both", expand=True)
-        self.tabs = tabs
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 14)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
 
-        general = self._page(tabs, "Général")
-        ttk.Label(general, text="Nom proposé pour un nouveau guide", style="Card.TLabel").grid(sticky="w")
-        name = ttk.Entry(general, textvariable=self.vars["name_template"], width=46)
-        name.grid(sticky="ew", pady=(4, 2))
-        self.preview = ttk.Label(general, style="CardMuted.TLabel")
-        self.preview.grid(sticky="w", pady=(0, 12))
-        self.vars["name_template"].trace_add("write", lambda *_: self._update_preview())
+        general = self._page("Général")
+        general.addWidget(QLabel("Nom proposé pour un nouveau guide"))
+        self.name_entry = self.vars["name_template"].bind_line(QLineEdit())
+        self.name_entry.setMinimumWidth(420)
+        general.addWidget(self.name_entry)
+        self.preview = set_role(QLabel(""), "muted")
+        general.addWidget(self.preview)
+        self.vars["name_template"].trace(lambda _value: self._update_preview())
         self._update_preview()
-        ttk.Label(general, text="Dossier des guides", style="Card.TLabel").grid(sticky="w")
-        folder = ttk.Frame(general, style="Card.TFrame")
-        folder.grid(sticky="ew", pady=(4, 0))
-        folder.columnconfigure(0, weight=1)
-        ttk.Entry(folder, textvariable=self.vars["output"]).grid(row=0, column=0, sticky="ew")
-        ttk.Button(folder, text="Parcourir…", command=self._choose_folder).grid(row=0, column=1, padx=(8, 0))
-        ttk.Frame(general, style="Card.TFrame", height=12).grid()
+        general.addSpacing(8)
+        general.addWidget(QLabel("Dossier des guides"))
+        folder = QHBoxLayout()
+        folder.addWidget(self.vars["output"].bind_line(QLineEdit()), 1)
+        browse = QPushButton("Parcourir…")
+        browse.clicked.connect(self._choose_folder)
+        folder.addWidget(browse)
+        general.addLayout(folder)
+        general.addSpacing(8)
         self._check(general, "check_updates", "Rechercher les mises à jour au démarrage (une fois par jour)")
         self._hint(general, "Seul accès réseau de StepWatch : une requête à l’API publique des versions "
                             "sur GitHub. Aucune capture ni donnée de l’intervention n’est envoyée.")
+        general.addStretch(1)
 
-        recording = self._page(tabs, "Enregistrement")
+        recording = self._page("Enregistrement")
         self._check(recording, "compact", "Réduire StepWatch en barre flottante pendant l’enregistrement")
-        position = ttk.Frame(recording, style="Card.TFrame")
-        position.grid(sticky="w", pady=(2, 10), padx=(24, 0))
-        ttk.Label(position, text="Position de la barre :", style="Card.TLabel").pack(side="left", padx=(0, 8))
-        ttk.Combobox(position, textvariable=self.vars["bar_position"], values=tuple(BAR_POSITIONS.values()),
-                     state="readonly", width=20).pack(side="left")
+        position = QHBoxLayout()
+        position.setContentsMargins(24, 0, 0, 8)
+        position.addWidget(QLabel("Position de la barre :"))
+        self.bar_combo = QComboBox()
+        self.bar_combo.addItems(list(BAR_POSITIONS.values()))
+        self.vars["bar_position"].bind_combo(self.bar_combo)
+        position.addWidget(self.bar_combo)
+        position.addStretch(1)
+        recording.addLayout(position)
         hotkeys = self._check(recording, "global_hotkeys",
                               "Raccourcis Ctrl+Maj+F9 / F10 / F11 actifs dans toutes les applications")
         if sys.platform != "win32":
-            hotkeys.configure(state="disabled")
+            hotkeys.setEnabled(False)
             self._hint(recording, "Sous Linux, ces raccourcis fonctionnent dans les fenêtres de StepWatch.")
         self._check(recording, "sound", "Signal sonore à chaque étape enregistrée")
+        recording.addStretch(1)
 
-        guide = self._page(tabs, "Guide et rapports")
+        guide = self._page("Guide et rapports")
         self._check(guide, "open_guide_after_stop", "Ouvrir l’onglet Guide à l’arrêt de l’enregistrement")
         self._check(guide, "auto_standalone", "Créer le rapport autonome automatiquement à l’arrêt")
         self._check(guide, "confirm_delete", "Demander confirmation avant de supprimer une étape")
         self._check(guide, "keep_retired", "Conserver la capture d’une étape supprimée (captures/retirees/)")
         self._hint(guide, "Décoché : la capture est effacée définitivement et la suppression ne peut pas être "
                           "annulée. StepWatch demande alors toujours confirmation.")
+        guide.addStretch(1)
 
-        interface = self._page(tabs, "Interface")
-        size = ttk.Frame(interface, style="Card.TFrame")
-        size.grid(sticky="w")
-        ttk.Label(size, text="Taille du texte :", style="Card.TLabel").pack(side="left", padx=(0, 8))
-        ttk.Combobox(size, textvariable=self.vars["font_scale"], state="readonly", width=8,
-                     values=tuple(f"{value} %" for value in CHOICES["font_scale"])).pack(side="left")
-        self._hint(interface, "Appliquée au prochain lancement de StepWatch.")
+        interface = self._page("Interface")
+        theme = QHBoxLayout()
+        theme.addWidget(QLabel("Thème :"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(list(THEME_LABELS.values()))
+        self.vars["theme"].bind_combo(self.theme_combo)
+        theme.addWidget(self.theme_combo)
+        theme.addStretch(1)
+        interface.addLayout(theme)
+        size = QHBoxLayout()
+        size.addWidget(QLabel("Taille du texte :"))
+        self.size_combo = QComboBox()
+        self.size_combo.addItems([f"{value} %" for value in CHOICES["font_scale"]])
+        self.vars["font_scale"].bind_combo(self.size_combo)
+        size.addWidget(self.size_combo)
+        size.addStretch(1)
+        interface.addLayout(size)
+        self._hint(interface, "Le thème et la taille du texte s’appliquent immédiatement.")
         self._check(interface, "advanced_open", "Afficher les réglages avancés au démarrage")
+        self._check(interface, "tray_icon", "Icône dans la zone de notification (démarrer, pause, arrêt)")
+        interface.addStretch(1)
 
-        buttons = ttk.Frame(frame)
-        buttons.pack(fill="x", pady=(12, 0))
-        ttk.Button(buttons, text="Réinitialiser", command=self._reset).pack(side="left")
-        ttk.Button(buttons, text="Enregistrer", style="Primary.TButton", command=self._apply).pack(side="right")
-        ttk.Button(buttons, text="Annuler", command=self.destroy).pack(side="right", padx=(0, 8))
-        self.bind("<Escape>", lambda _event: self.destroy())
-        self.bind("<Return>", lambda _event: self._apply())
-        name.focus_set()
+        buttons = QHBoxLayout()
+        reset = QPushButton("Réinitialiser")
+        reset.clicked.connect(self._reset)
+        buttons.addWidget(reset)
+        buttons.addStretch(1)
+        cancel = QPushButton("Annuler")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        self.save_button = set_role(QPushButton("Enregistrer"), "primary")
+        self.save_button.setDefault(True)
+        self.save_button.clicked.connect(self._apply)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+        self.name_entry.setFocus()
 
     # ----- Construction ------------------------------------------------------
 
-    def _page(self, tabs: ttk.Notebook, title: str) -> ttk.Frame:
-        page = ttk.Frame(tabs, style="Card.TFrame", padding=16)
-        page.columnconfigure(0, weight=1)
-        tabs.add(page, text=title)
-        return page
+    def _page(self, title: str) -> QVBoxLayout:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(6)
+        self.tabs.addTab(page, title)
+        return layout
 
-    def _check(self, parent: ttk.Frame, key: str, text: str) -> ttk.Checkbutton:
-        button = ttk.Checkbutton(parent, text=text, variable=self.vars[key])
-        button.grid(sticky="w", pady=(0, 6))
-        return button
+    def _check(self, layout: QVBoxLayout, key: str, text: str) -> QCheckBox:
+        box = self.vars[key].bind_check(QCheckBox(text))
+        layout.addWidget(box)
+        return box
 
-    def _hint(self, parent: ttk.Frame, text: str) -> None:
-        ttk.Label(parent, text=text, style="CardMuted.TLabel", wraplength=420).grid(sticky="w", pady=(0, 10))
+    def _hint(self, layout: QVBoxLayout, text: str) -> None:
+        label = set_role(QLabel(text), "muted")
+        label.setWordWrap(True)
+        label.setMaximumWidth(520)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        layout.addWidget(label)
 
     def _update_preview(self) -> None:
-        self.preview.configure(text=f"{{date}} et {{heure}} sont remplacés. Exemple : « "
-                                    f"{expand_name(self.vars['name_template'].get())} »")
+        self.preview.setText(f"{{date}} et {{heure}} sont remplacés. Exemple : « "
+                             f"{expand_name(self.vars['name_template'].get())} »")
 
     def _choose_folder(self) -> None:
         selected = filedialog.askdirectory(parent=self, title="Dossier des guides")
@@ -128,11 +162,11 @@ class SettingsDialog(tk.Toplevel):
     # ----- Résultat ------------------------------------------------------------
 
     def values(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, variable in self.vars.items():
-            result[key] = variable.get()
+        result: dict[str, Any] = {key: variable.get() for key, variable in self.vars.items()}
         positions = {label: key for key, label in BAR_POSITIONS.items()}
         result["bar_position"] = positions.get(result["bar_position"], "bas")
+        themes = {label: key for key, label in THEME_LABELS.items()}
+        result["theme"] = themes.get(result["theme"], "systeme")
         try:
             result["font_scale"] = int(str(result["font_scale"]).rstrip(" %"))
         except ValueError:
@@ -141,8 +175,8 @@ class SettingsDialog(tk.Toplevel):
 
     def _apply(self) -> None:
         self._on_apply(self.values())
-        self.destroy()
+        self.accept()
 
     def _reset(self) -> None:
         self._on_reset()
-        self.destroy()
+        self.accept()

@@ -2,11 +2,12 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
-## Version 1.0 — interface Qt (prévue)
+## Version 1.0 — interface Qt
 
-- Réécriture de l'interface avec PySide6 (Qt 6, LGPL) : Wayland natif, affichage haute résolution, thème sombre, icône dans la zone de notification.
-- Le moteur de capture, le stockage, les rapports et la mise à jour automatique restent identiques.
-- À mesurer : taille des exécutables avec Qt (modules inutiles exclus).
+- Fait : interface réécrite avec PySide6 6.12 (Qt 6, LGPL) ; Wayland natif sans XWayland ; thème clair, sombre ou système ; icône dans la zone de notification ; traduction française des dialogues Qt ; tests de l'interface hors écran.
+- Inchangés : moteur de capture, stockage, rapports, mise à jour automatique.
+- Taille mesurée : paquet `.deb` de 39 Mo (27 Mo avec Tk), après retrait des greffons Qt inutiles.
+- À venir : barre flottante sous Wayland natif (position et premier plan décidés par le compositeur), essais GNOME et KDE.
 
 ## Version 0.10 — mises à jour automatiques
 
@@ -45,7 +46,7 @@ La vue **Étapes** rouvre une session et charge seulement l'image sélectionnée
 | --- | --- | --- |
 | Paquet Arch Linux | `.pkg.tar.zst` construit par `makepkg`, installé, testé et retiré par la CI. | Non signé avec une clé de mainteneur Arch ; vérifier le SHA-256. |
 | Debian 12 | `.deb` installé, testé et retiré dans un conteneur Debian 12. | Paquet construit sur Ubuntu 22.04 (glibc 2.35 minimum). |
-| Wayland | Fonctionnement par XWayland vérifié dans weston ; message explicite sans XWayland ; icône associée dans les docks. | Tk n'a pas de backend Wayland natif : XWayland reste nécessaire. |
+| Wayland | Fonctionnement par XWayland et en Wayland natif vérifié dans weston ; icône associée dans les docks. | Sous Wayland natif, la position de la barre flottante dépend du compositeur. |
 | Auto-test | `stepwatch --self-test` vérifie une installation sans données personnelles. | — |
 
 Cette version ouvrait l'interface sous Linux pour l'import ShareX et la consultation des rapports.

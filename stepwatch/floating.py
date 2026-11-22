@@ -1,19 +1,21 @@
-"""Compact floating bar shown while recording.
+"""Barre flottante compacte affichée pendant l'enregistrement.
 
-The main window gets out of the way: the technician keeps the recorded
-application visible and controls the session from a small always-on-top bar
-(pause, note, stop). Clicks on the bar never become steps. On Windows the
-bar is excluded from screen captures; elsewhere it is masked in captures
-when it overlaps the target.
+La fenêtre principale s'efface : le technicien garde l'application enregistrée
+visible et pilote la session depuis une petite barre toujours au premier plan
+(pause, note, arrêt). Les clics sur la barre ne deviennent jamais des étapes.
+Sous Windows, la barre est exclue des captures ; ailleurs, elle est masquée
+dans les captures quand elle chevauche la cible.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk
 from typing import Callable
 
-from .theme import PALETTE, STATUS_COLOURS
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QGuiApplication, QPainter, QColor
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
+
+from .theme import STATUS_COLOURS, set_role
 
 STATE_TEXT = {
     "starting": "Démarrage…",
@@ -23,84 +25,117 @@ STATE_TEXT = {
 }
 
 
-class FloatingBar(tk.Toplevel):
-    def __init__(self, master: tk.Misc, *, font: str, icon: tk.PhotoImage | None,
-                 on_pause: Callable[[], None], on_resume: Callable[[], None],
-                 on_note: Callable[[], None], on_stop: Callable[[], None],
-                 on_expand: Callable[[], None], scale: float = 1.0):
-        super().__init__(master)
-        p = PALETTE
+class StatusDot(QWidget):
+    """Petit disque coloré de l'état d'enregistrement."""
+
+    def __init__(self, size: int = 10, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._colour = QColor(STATUS_COLOURS["idle"][0])
+
+    def set_colour(self, colour: str) -> None:
+        self._colour = QColor(colour)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - API Qt
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._colour)
+        painter.drawEllipse(1, 1, self.width() - 2, self.height() - 2)
+
+
+class FloatingBar(QFrame):
+    def __init__(self, *, icon, on_pause: Callable[[], None], on_resume: Callable[[], None],
+                 on_note: Callable[[], None], on_stop: Callable[[], None], on_expand: Callable[[], None]):
+        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.WindowStaysOnTopHint)
+        self.setObjectName("FloatingBar")
+        self.setWindowTitle("StepWatch — enregistrement")
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self._on_pause, self._on_resume = on_pause, on_resume
         self._state = None
-        self.withdraw()
-        self.overrideredirect(True)
-        try:
-            self.attributes("-topmost", True)
-        except tk.TclError:
-            pass
-        # 1 px border drawn by the outer frame; the window manager draws none.
-        self.configure(bg=p["border_strong"])
-        inner = tk.Frame(self, bg=p["surface"], padx=round(10 * scale), pady=round(7 * scale))
-        inner.pack(padx=1, pady=1)
-        self._drag_widgets = [inner]
+        self._drag_origin: QPoint | None = None
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 7, 8, 7)
+        layout.setSpacing(6)
         if icon is not None:
-            logo = tk.Label(inner, image=icon, bg=p["surface"])
-            logo.pack(side="left", padx=(0, 8))
-            self._drag_widgets.append(logo)
-        name = tk.Label(inner, text="StepWatch", bg=p["surface"], fg=p["text"], font=(font, 10, "bold"))
-        name.pack(side="left")
-        self._drag_widgets.append(name)
-        tk.Frame(inner, bg=p["border"], width=1, height=round(22 * scale)).pack(side="left", padx=10)
-        size = round(10 * scale)
-        self._dot = tk.Canvas(inner, width=size, height=size, bg=p["surface"], highlightthickness=0)
-        self._dot.pack(side="left", padx=(0, 6))
-        self._dot_id = self._dot.create_oval(1, 1, size - 1, size - 1, outline="")
-        self._status = tk.Label(inner, text="", bg=p["surface"], fg=p["text"], font=(font, 9, "bold"))
-        self._status.pack(side="left")
-        self._count = tk.Label(inner, text="0 étape", bg=p["surface"], fg=p["muted"], font=(font, 9))
-        self._count.pack(side="left", padx=(10, 12))
-        self._drag_widgets += [self._dot, self._status, self._count]
-        self.pause_button = ttk.Button(inner, text="Pause", width=9, style="Bar.TButton", command=self._toggle_pause)
-        self.pause_button.pack(side="left", padx=(0, 6))
-        self.note_button = ttk.Button(inner, text="+ Note", width=7, style="Bar.TButton", command=on_note)
-        self.note_button.pack(side="left", padx=(0, 6))
-        self.stop_button = ttk.Button(inner, text="■ Arrêter", width=9, style="BarRecord.TButton", command=on_stop)
-        self.stop_button.pack(side="left", padx=(0, 6))
-        self.expand_button = ttk.Button(inner, text="⤢", width=3, style="Icon.TButton", command=on_expand)
-        self.expand_button.pack(side="left")
-        for widget in self._drag_widgets:
-            widget.bind("<ButtonPress-1>", self._start_drag)
-            widget.bind("<B1-Motion>", self._drag)
-        self._origin = (0, 0)
+            logo = QLabel()
+            logo.setPixmap(icon)
+            layout.addWidget(logo)
+        name = QLabel("StepWatch")
+        name.setStyleSheet("font-weight: 700;")
+        layout.addWidget(name)
+        rule = QFrame()
+        set_role(rule, "rule")
+        rule.setFixedHeight(22)
+        layout.addSpacing(4)
+        layout.addWidget(rule)
+        layout.addSpacing(4)
+        self._dot = StatusDot(10)
+        layout.addWidget(self._dot)
+        self._status = QLabel("")
+        self._status.setStyleSheet("font-weight: 700;")
+        layout.addWidget(self._status)
+        self._count = set_role(QLabel("0 étape"), "muted")
+        layout.addWidget(self._count)
+        layout.addSpacing(6)
+        self.pause_button = set_role(QPushButton("Pause"), "compact")
+        self.pause_button.clicked.connect(self._toggle_pause)
+        self.note_button = set_role(QPushButton("+ Note"), "compact")
+        self.note_button.clicked.connect(on_note)
+        self.stop_button = QPushButton("■ Arrêter")
+        set_role(self.stop_button, "record")
+        self.stop_button.setStyleSheet("padding: 4px 10px;")
+        self.stop_button.clicked.connect(on_stop)
+        self.expand_button = set_role(QPushButton("⤢"), "icon")
+        self.expand_button.setToolTip("Rouvrir la fenêtre de StepWatch")
+        self.expand_button.clicked.connect(on_expand)
+        for button in (self.pause_button, self.note_button, self.stop_button, self.expand_button):
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            layout.addWidget(button)
 
-    def show(self, position: str = "bas") -> None:
-        """Centre of the screen, at the bottom (above a typical task bar) or at the top."""
-        self.update_idletasks()
-        width, height = self.winfo_reqwidth(), self.winfo_reqheight()
-        x = max(0, (self.winfo_screenwidth() - width) // 2)
-        y = 24 if position == "haut" else max(0, self.winfo_screenheight() - height - 72)
-        self.geometry(f"+{x}+{y}")
-        self.deiconify()
-        self.lift()
+    def show_at(self, position: str = "bas") -> None:
+        """Centre de l'écran, en bas (au-dessus d'une barre des tâches) ou en haut."""
+        self.adjustSize()
+        screen = QGuiApplication.primaryScreen()
+        area = screen.availableGeometry() if screen is not None else None
+        if area is not None:
+            x = area.x() + max(0, (area.width() - self.width()) // 2)
+            y = area.y() + 24 if position == "haut" else area.y() + max(0, area.height() - self.height() - 48)
+            self.move(x, y)
+        self.show()
+        self.raise_()
+
+    # Compatibilité avec l'ancienne barre Tk.
+    show_bar = show_at
 
     def update_state(self, state: str, kept: str) -> None:
         if state != self._state:
             self._state = state
-            dot, _background, _text = STATUS_COLOURS.get(state, STATUS_COLOURS["idle"])
-            self._dot.itemconfigure(self._dot_id, fill=dot)
-            self._status.configure(text=STATE_TEXT.get(state, state))
-            self.pause_button.configure(text="Reprendre" if state == "paused" else "Pause",
-                                        state="normal" if state in {"recording", "paused"} else "disabled")
-            self.note_button.configure(state="normal" if state in {"recording", "paused"} else "disabled")
-            self.stop_button.configure(state="normal" if state in {"starting", "recording", "paused"} else "disabled")
+            self._dot.set_colour(STATUS_COLOURS.get(state, STATUS_COLOURS["idle"])[0])
+            self._status.setText(STATE_TEXT.get(state, state))
+            self.pause_button.setText("Reprendre" if state == "paused" else "Pause")
+            self.pause_button.setEnabled(state in {"recording", "paused"})
+            self.note_button.setEnabled(state in {"recording", "paused"})
+            self.stop_button.setEnabled(state in {"starting", "recording", "paused"})
         count = int(kept) if str(kept).isdigit() else 0
-        self._count.configure(text=f"{count} étape{'s' if count > 1 else ''}")
+        self._count.setText(f"{count} étape{'s' if count > 1 else ''}")
 
     def _toggle_pause(self) -> None:
         (self._on_resume if self._state == "paused" else self._on_pause)()
 
-    def _start_drag(self, event) -> None:
-        self._origin = (event.x_root - self.winfo_rootx(), event.y_root - self.winfo_rooty())
+    # Déplacement à la souris (la barre n'a pas de barre de titre).
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                return  # Wayland : seul le compositeur peut déplacer la fenêtre.
+            self._drag_origin = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
-    def _drag(self, event) -> None:
-        self.geometry(f"+{event.x_root - self._origin[0]}+{event.y_root - self._origin[1]}")
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._drag_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_origin)
+
+    def mouseReleaseEvent(self, _event) -> None:  # noqa: N802
+        self._drag_origin = None

@@ -18,14 +18,9 @@ def _tell_already_running():
     if sys.stderr is not None:
         print(f"StepWatch : {ALREADY_RUNNING}", file=sys.stderr)
     try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            messagebox.showinfo("StepWatch", ALREADY_RUNNING, parent=root)
-        finally:
-            root.destroy()
+        from stepwatch.qtcompat import application, messagebox
+        application()
+        messagebox.showinfo("StepWatch", ALREADY_RUNNING)
     except Exception:
         logging.getLogger("stepwatch").exception("Message « déjà ouvert » non affiché")
 

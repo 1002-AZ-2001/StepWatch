@@ -8,10 +8,10 @@ Le workflow [Tests et paquets Windows / Debian](https://github.com/1002-AZ-2001/
 
 | Job | Vérifications |
 | --- | --- |
-| Windows x64 | Installation par `install.ps1` ; suite complète, interface Tk comprise ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; `StepWatch.exe --self-test` ; sommes SHA-256. |
-| Linux amd64 (Ubuntu 22.04) | Vérifications `ruff` et `pip check`, tests Tk et capture X11 sous Xvfb. Construction et installation du `.deb`, contrôle de la présence du script ScreenCast, lancement et capture X11 depuis l'exécutable installé. Contrôle de l'affichage de l'interface avec Weston et XWayland. Sommes SHA-256. |
+| Windows x64 | Installation par `install.ps1` ; suite complète, interface Qt comprise (hors écran) ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; `StepWatch.exe --self-test` ; sommes SHA-256. |
+| Linux amd64 (Ubuntu 22.04) | Vérifications `ruff` et `pip check`, tests de l'interface Qt (hors écran) et capture X11 sous Xvfb. Construction et installation du `.deb`, contrôle de la présence du script ScreenCast, lancement et capture X11 depuis l'exécutable installé. Auto-test de l'interface sous Weston, avec XWayland puis en Wayland natif. Sommes SHA-256. |
 | Debian 12 (conteneur) | Installation du `.deb` par `apt`, auto-test avec capture X11, désinstallation complète. |
-| Arch Linux (conteneurs) | Paquet construit par `makepkg` non root ; installation par `pacman`, auto-test X11 et Wayland (weston + `xorg-xwayland`), désinstallation complète. |
+| Arch Linux (conteneurs) | Paquet construit par `makepkg` non root ; installation par `pacman`, auto-test X11 et Wayland (weston, avec et sans `xorg-xwayland`), désinstallation complète. |
 | Publier la version | Notes tirées de `CHANGELOG.md`, tag et Release, uniquement pour une version pas encore publiée (voir [distribution](distribution.md)). |
 
 Les tests simulent le backend Windows pour les cas difficiles à provoquer : fenêtre fermée, verrou d'antivirus, hook retiré par Windows, pause pendant une capture, etc. **Ces simulations ne remplacent pas un essai sur un poste réel** : hooks, DPI mixte, télémaintenance et bureau sécurisé UAC ne sont pas reproduits par la CI.
@@ -34,7 +34,7 @@ python3 -m venv .venv
 .venv/bin/ruff check stepwatch tests scripts
 ```
 
-Activez les tests de l'interface et de capture avec Tcl/Tk et un serveur X de test déjà démarré, par exemple `Xvfb :99`.
+Les tests de l'interface Qt tournent hors écran (`QT_QPA_PLATFORM=offscreen`), sans serveur graphique. Les tests de capture réelle demandent un serveur X de test déjà démarré, par exemple `Xvfb :99`.
 
 ```bash
 DISPLAY=:99 XDG_SESSION_TYPE=x11 STEPWATCH_GUI_TESTS=1 STEPWATCH_X11_TESTS=1 \
@@ -68,6 +68,7 @@ STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 't
 13. Pendant un enregistrement, utilisez Ctrl+Maj+F9, F10 et F11 depuis une autre application (Bloc-notes) : pause, note et arrêt doivent répondre, et aucune autre frappe ne doit apparaître dans le journal ni dans les rapports. Lancez StepWatch une seconde fois : un message doit l'empêcher.
 14. Parcourez chaque menu pendant et hors enregistrement (entrées grisées ou actives), puis modifiez chaque paramètre dans **Paramètres…**, relancez StepWatch et vérifiez qu'il est conservé.
 15. Avec la version précédente installée (exécutable, dossier portable, paquet Debian ou Arch), ouvrez **Aide › Rechercher des mises à jour…** : la nouvelle version doit être proposée, téléchargée, vérifiée, installée, puis StepWatch doit redémarrer dans la nouvelle version (**Aide › À propos**). Sous Windows, vérifiez que le fichier `.old` a disparu après le redémarrage. `stepwatch --check-updates` affiche la dernière version publiée.
+16. Sous Windows, puis sous Linux X11 et Wayland (GNOME ou KDE), vérifiez le thème sombre, l'icône de la zone de notification (démarrer, pause, arrêt) et la netteté à 150 %. Sous Wayland sans XWayland, vérifiez que la fenêtre s'ouvre et que la barre flottante reste utilisable.
 
 ## Validation sur un bureau Linux
 
