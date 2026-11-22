@@ -41,7 +41,7 @@ import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from . import __version__
@@ -55,7 +55,7 @@ TIMEOUT = 15
 MAX_DOWNLOAD = 400_000_000
 NOTES_LIMIT = 6000
 LINUX_COMMAND = "/usr/bin/stepwatch"
-LINUX_PAYLOAD = Path("/opt/stepwatch")
+LINUX_PAYLOAD = PurePosixPath("/opt/stepwatch")
 AFTER_UPDATE = "--after-update"
 #: Certificats système connus, si OpenSSL embarqué ne trouve pas les siens.
 CA_FILES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem",
@@ -214,9 +214,10 @@ def detect_installation(*, frozen: bool | None = None, executable: str | None = 
         return Installation("portable", exe.parent) if inside else Installation("exe", exe)
     if platform.startswith("linux"):
         try:
-            installed = exe.resolve().is_relative_to(LINUX_PAYLOAD)
+            real = exe.resolve() if os.name == "posix" else exe
         except OSError:
-            installed = False
+            real = exe
+        installed = PurePosixPath(real.as_posix()).is_relative_to(LINUX_PAYLOAD)
         if installed:
             if (root / "var/lib/dpkg/info/stepwatch.list").exists():
                 return Installation("deb")
