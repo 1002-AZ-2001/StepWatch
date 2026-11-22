@@ -1,18 +1,19 @@
-"""Visual style of the interface: palette, ttk styles and the StepWatch icon.
+"""Apparence de StepWatch : palettes claire et sombre, feuille de style Qt et icône.
 
-Light surfaces, one accent colour, a dark primary button and a red record
-button. Only ttk's portable "clam" theme is used, so the look is the same on
-Windows, X11 and XWayland. The icon reproduces packaging/linux/stepwatch.svg.
+Surfaces sobres, une couleur d'accent, un bouton principal foncé et un bouton
+d'enregistrement rouge. Le style Qt « Fusion » est utilisé partout, pour un
+rendu identique sous Windows, X11 et Wayland. Les widgets choisissent leur
+rôle par une propriété (``role``) lue par la feuille de style. L'icône
+reproduit packaging/linux/stepwatch.svg.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import font as tkfont, ttk
+from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-PALETTE = {
+LIGHT = {
     "bg": "#f4f6fa",
     "surface": "#ffffff",
     "border": "#e2e6ee",
@@ -24,145 +25,180 @@ PALETTE = {
     "accent_text": "#1d3a8f",
     "primary": "#111827",
     "primary_hover": "#273449",
+    "primary_text": "#ffffff",
     "record": "#dc2626",
     "record_hover": "#b91c1c",
     "danger_text": "#b42318",
     "hover": "#f2f4f7",
     "disabled_text": "#a0a8b8",
+    "disabled_fill": "#d0d5dd",
     "preview": "#0f172a",
     "preview_text": "#cbd5e1",
+    "log_text": "#344054",
 }
 
-#: Status pill colours per recorder state: (dot, background, text).
-STATUS_COLOURS = {
-    "recording": ("#dc2626", "#fdecec", "#8a1c1c"),
-    "starting": ("#d97706", "#fdf3e4", "#7a4706"),
-    "paused": ("#d97706", "#fdf3e4", "#7a4706"),
-    "stopping": ("#d97706", "#fdf3e4", "#7a4706"),
-    "error": ("#b42318", "#fdecec", "#8a1c1c"),
-    "stopped": ("#059669", "#e7f6f0", "#0b5e45"),
-    "idle": ("#98a2b3", "#eef1f5", "#344054"),
+DARK = {
+    "bg": "#0f141c",
+    "surface": "#171e29",
+    "border": "#263042",
+    "border_strong": "#34405a",
+    "text": "#e6e9ef",
+    "muted": "#94a0b4",
+    "accent": "#5b8cff",
+    "accent_soft": "#1f2c4d",
+    "accent_text": "#c7d6ff",
+    "primary": "#e6e9ef",
+    "primary_hover": "#ffffff",
+    "primary_text": "#0f141c",
+    "record": "#e5484d",
+    "record_hover": "#f2555a",
+    "danger_text": "#ff8a8a",
+    "hover": "#1f2836",
+    "disabled_text": "#5b6678",
+    "disabled_fill": "#2a3343",
+    "preview": "#0a0e14",
+    "preview_text": "#94a0b4",
+    "log_text": "#c3cad6",
 }
 
+#: Palette en cours ; modifiée sur place par ``use_palette``.
+PALETTE: dict[str, str] = dict(LIGHT)
 
-def pick_fonts(root: tk.Misc) -> tuple[str, str]:
-    families = {family.casefold(): family for family in tkfont.families(root)}
-    default = tkfont.nametofont("TkDefaultFont", root=root).actual("family")
-    fixed = tkfont.nametofont("TkFixedFont", root=root).actual("family")
-    ui = next((families[name] for name in ("segoe ui", "inter", "noto sans", "dejavu sans", "liberation sans")
-               if name in families), default)
-    mono = next((families[name] for name in ("cascadia mono", "consolas", "dejavu sans mono", "liberation mono")
-                 if name in families), fixed)
+#: Pastille d'état par état de l'enregistreur : (point, fond, texte), en clair puis en sombre.
+_STATUS = {
+    "recording": (("#dc2626", "#fdecec", "#8a1c1c"), ("#e5484d", "#3b1a1d", "#ffb3b5")),
+    "starting": (("#d97706", "#fdf3e4", "#7a4706"), ("#f5a524", "#3a2a12", "#ffd89a")),
+    "paused": (("#d97706", "#fdf3e4", "#7a4706"), ("#f5a524", "#3a2a12", "#ffd89a")),
+    "stopping": (("#d97706", "#fdf3e4", "#7a4706"), ("#f5a524", "#3a2a12", "#ffd89a")),
+    "error": (("#b42318", "#fdecec", "#8a1c1c"), ("#ff6b6b", "#3b1a1d", "#ffb3b5")),
+    "stopped": (("#059669", "#e7f6f0", "#0b5e45"), ("#30c48d", "#123326", "#9ff0cf")),
+    "idle": (("#98a2b3", "#eef1f5", "#344054"), ("#6b778c", "#1f2836", "#c3cad6")),
+}
+STATUS_COLOURS: dict[str, tuple[str, str, str]] = {state: pair[0] for state, pair in _STATUS.items()}
+
+THEMES = ("clair", "sombre", "systeme")
+#: Coche des cases (chemin à barres obliques, lu par la feuille de style Qt).
+CHECK_ICON = (Path(__file__).resolve().parent / "assets" / "check.svg").as_posix()
+
+
+def is_dark(choice: str, system_dark: bool) -> bool:
+    return choice == "sombre" or (choice == "systeme" and system_dark)
+
+
+def use_palette(dark: bool) -> None:
+    """Choisit la palette claire ou sombre pour toute l'interface."""
+    PALETTE.clear()
+    PALETTE.update(DARK if dark else LIGHT)
+    STATUS_COLOURS.clear()
+    STATUS_COLOURS.update({state: pair[1 if dark else 0] for state, pair in _STATUS.items()})
+
+
+def stylesheet(font: str, size: float = 10) -> str:
+    """Feuille de style Qt de la palette en cours (taille de police en points)."""
+    p = PALETTE
+    pt = f"{size:g}pt"
+    small = f"{max(6.5, size - 1.5):g}pt"
+    big = f"{size + 3:g}pt"
+    return f"""
+* {{ font-family: "{font}"; font-size: {pt}; color: {p['text']}; }}
+QMainWindow, QDialog, QWidget#Page {{ background: {p['bg']}; }}
+QWidget[role="card"], QFrame[role="card"] {{ background: {p['surface']}; border: 1px solid {p['border']};
+    border-radius: 8px; }}
+QWidget[role="header"] {{ background: {p['surface']}; border-bottom: 1px solid {p['border']}; }}
+QLabel {{ background: transparent; }}
+QLabel[role="title"] {{ font-size: {size + 6:g}pt; font-weight: 700; }}
+QLabel[role="cardtitle"] {{ font-size: {big}; font-weight: 700; }}
+QLabel[role="section"] {{ color: {p['muted']}; font-size: {small}; font-weight: 700; letter-spacing: 0.5px; }}
+QLabel[role="muted"] {{ color: {p['muted']}; }}
+QLabel[role="count"] {{ font-size: {big}; font-weight: 700; }}
+QLabel[role="chip"] {{ background: {p['accent_soft']}; color: {p['accent_text']}; font-weight: 700;
+    border-radius: 9px; padding: 2px 9px; font-size: {small}; }}
+QLabel[role="badge"] {{ background: {p['primary']}; color: {p['primary_text']}; font-weight: 700;
+    border-radius: 4px; padding: 2px 9px; }}
+QLabel[role="preview"] {{ background: {p['preview']}; color: {p['preview_text']}; border-radius: 6px; }}
+QLabel[role="status"] {{ font-weight: 700; border-radius: 11px; padding: 3px 10px; }}
+QPushButton, QToolButton {{ background: {p['surface']}; border: 1px solid {p['border_strong']};
+    border-radius: 6px; padding: 6px 14px; }}
+QPushButton:hover, QToolButton:hover {{ background: {p['hover']}; border-color: {p['muted']}; }}
+QPushButton:pressed, QToolButton:pressed {{ background: {p['border']}; }}
+QPushButton:focus, QToolButton:focus {{ border-color: {p['accent']}; }}
+QPushButton:disabled, QToolButton:disabled {{ color: {p['disabled_text']}; border-color: {p['border']};
+    background: {p['surface']}; }}
+QToolButton::menu-indicator {{ subcontrol-position: right center; right: 6px; }}
+QToolButton[popupMode="2"] {{ padding-right: 24px; }}
+QPushButton[role="primary"], QToolButton[role="primary"] {{ background: {p['primary']}; color: {p['primary_text']};
+    border-color: {p['primary']}; font-weight: 700; }}
+QPushButton[role="primary"]:hover {{ background: {p['primary_hover']}; }}
+QPushButton[role="record"] {{ background: {p['record']}; color: #ffffff; border-color: {p['record']};
+    font-weight: 700; }}
+QPushButton[role="record"]:hover {{ background: {p['record_hover']}; }}
+QPushButton[role="primary"]:disabled, QPushButton[role="record"]:disabled {{ background: {p['disabled_fill']};
+    border-color: {p['disabled_fill']}; color: #ffffff; }}
+QPushButton[role="icon"] {{ border-color: transparent; background: transparent; padding: 5px 8px; }}
+QPushButton[role="icon"]:hover {{ background: {p['hover']}; border-color: {p['border']}; }}
+QPushButton[role="link"] {{ border: none; background: transparent; color: {p['accent']}; font-weight: 700;
+    padding: 4px 2px; text-align: left; }}
+QPushButton[role="compact"] {{ padding: 4px 9px; }}
+QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {{ background: {p['surface']}; border: 1px solid {p['border_strong']};
+    border-radius: 6px; padding: 5px 7px; selection-background-color: {p['accent']}; selection-color: #ffffff; }}
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus {{ border-color: {p['accent']}; }}
+QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {{ background: {p['hover']}; color: {p['muted']}; }}
+QLineEdit[role="title"] {{ font-size: {size + 5:g}pt; font-weight: 700; }}
+QLineEdit[role="steptitle"] {{ font-size: {size + 2:g}pt; font-weight: 700; }}
+QComboBox QAbstractItemView {{ background: {p['surface']}; border: 1px solid {p['border_strong']};
+    selection-background-color: {p['accent_soft']}; selection-color: {p['accent_text']}; }}
+QCheckBox {{ spacing: 8px; background: transparent; }}
+QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid {p['border_strong']}; border-radius: 4px;
+    background: {p['surface']}; }}
+QCheckBox::indicator:checked {{ background: {p['accent']}; border-color: {p['accent']}; image: url("{CHECK_ICON}"); }}
+QCheckBox::indicator:checked:disabled {{ background: {p['disabled_fill']}; border-color: {p['disabled_fill']}; }}
+QCheckBox:disabled {{ color: {p['disabled_text']}; }}
+QTabWidget::pane {{ border: none; }}
+QTabBar::tab {{ background: transparent; color: {p['muted']}; padding: 9px 18px; font-weight: 700;
+    border: none; border-bottom: 2px solid transparent; }}
+QTabBar::tab:selected {{ color: {p['accent']}; border-bottom-color: {p['accent']}; }}
+QTabBar::tab:hover:!selected {{ color: {p['text']}; }}
+QTreeWidget, QListWidget {{ background: {p['surface']}; border: none; alternate-background-color: {p['hover']}; }}
+QTreeWidget::item {{ padding: 6px 2px; }}
+QTreeWidget::item:selected {{ background: {p['accent_soft']}; color: {p['accent_text']}; }}
+QHeaderView::section {{ background: {p['surface']}; color: {p['muted']}; border: none;
+    border-bottom: 1px solid {p['border']}; padding: 6px; font-weight: 700; font-size: {small}; }}
+QScrollArea {{ border: none; background: transparent; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {p['border_strong']}; border-radius: 5px; min-height: 24px; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; }}
+QScrollBar::handle:horizontal {{ background: {p['border_strong']}; border-radius: 5px; min-width: 24px; }}
+QMenuBar {{ background: {p['surface']}; border-bottom: 1px solid {p['border']}; }}
+QMenuBar::item {{ padding: 5px 10px; background: transparent; }}
+QMenuBar::item:selected {{ background: {p['accent_soft']}; color: {p['accent_text']}; border-radius: 4px; }}
+QMenu {{ background: {p['surface']}; border: 1px solid {p['border_strong']}; padding: 4px; }}
+QMenu::item {{ padding: 6px 28px 6px 22px; border-radius: 4px; }}
+QMenu::item:selected {{ background: {p['accent_soft']}; color: {p['accent_text']}; }}
+QMenu::item:disabled {{ color: {p['disabled_text']}; }}
+QMenu::separator {{ height: 1px; background: {p['border']}; margin: 4px 8px; }}
+QProgressBar {{ background: {p['hover']}; border: 1px solid {p['border']}; border-radius: 5px; height: 10px;
+    text-align: center; }}
+QProgressBar::chunk {{ background: {p['accent']}; border-radius: 4px; }}
+QWidget#FloatingBar {{ background: {p['surface']}; border: 1px solid {p['border_strong']}; border-radius: 10px; }}
+QFrame[role="rule"] {{ background: {p['border']}; max-width: 1px; min-width: 1px; border: none; }}
+QToolTip {{ background: {p['primary']}; color: {p['primary_text']}; border: none; padding: 4px 6px; }}
+"""
+
+
+def pick_fonts(families: list[str]) -> tuple[str, str]:
+    """Police d'interface et police à chasse fixe parmi celles installées."""
+    known = {family.casefold(): family for family in families}
+    ui = next((known[name] for name in ("segoe ui", "inter", "noto sans", "dejavu sans", "liberation sans",
+                                        "cantarell", "ubuntu") if name in known), "Sans Serif")
+    mono = next((known[name] for name in ("cascadia mono", "consolas", "dejavu sans mono", "liberation mono",
+                                          "noto sans mono") if name in known), "Monospace")
     return ui, mono
 
 
-def apply_theme(root: tk.Misc, ui: str, row_height: int) -> ttk.Style:
-    """Configure every ttk style used by StepWatch."""
-    p = PALETTE
-    style = ttk.Style(root)
-    if "clam" in style.theme_names():
-        style.theme_use("clam")
-    root.configure(bg=p["bg"])
-    flat = {"bordercolor": p["border_strong"], "lightcolor": p["surface"], "darkcolor": p["surface"]}
-
-    style.configure(".", font=(ui, 10), background=p["bg"], foreground=p["text"],
-                    focuscolor=p["accent"])
-    style.configure("TFrame", background=p["bg"])
-    style.configure("Card.TFrame", background=p["surface"])
-    style.configure("Header.TFrame", background=p["surface"])
-    style.configure("Rule.TFrame", background=p["border"])
-    style.configure("TLabel", background=p["bg"], foreground=p["text"], font=(ui, 10))
-    style.configure("Muted.TLabel", foreground=p["muted"])
-    style.configure("Card.TLabel", background=p["surface"])
-    style.configure("CardMuted.TLabel", background=p["surface"], foreground=p["muted"])
-    style.configure("CardTitle.TLabel", background=p["surface"], font=(ui, 13, "bold"))
-    style.configure("Section.TLabel", background=p["surface"], foreground=p["muted"], font=(ui, 8, "bold"))
-    style.configure("Title.TLabel", background=p["surface"], foreground=p["text"], font=(ui, 16, "bold"))
-    style.configure("Count.TLabel", background=p["surface"], foreground=p["text"], font=(ui, 13, "bold"))
-    style.configure("Chip.TLabel", background=p["accent_soft"], foreground=p["accent_text"],
-                    font=(ui, 9, "bold"), padding=(8, 2))
-
-    style.configure("TButton", background=p["surface"], foreground=p["text"], padding=(14, 7),
-                    relief="raised", borderwidth=1, focusthickness=0, font=(ui, 10), **flat)
-    style.map("TButton", background=[("disabled", p["surface"]), ("pressed", p["border"]), ("active", p["hover"])],
-              foreground=[("disabled", p["disabled_text"])],
-              bordercolor=[("disabled", p["border"]), ("focus", p["accent"]), ("active", "#98a2b3")])
-    for name, colour, hover in (("Primary", p["primary"], p["primary_hover"]),
-                                ("Record", p["record"], p["record_hover"])):
-        style.configure(f"{name}.TButton", background=colour, foreground="#ffffff", bordercolor=colour,
-                        lightcolor=colour, darkcolor=colour, font=(ui, 10, "bold"))
-        style.map(f"{name}.TButton", background=[("disabled", "#d0d5dd"), ("active", hover)],
-                  foreground=[("disabled", "#ffffff")], bordercolor=[("disabled", "#d0d5dd"), ("active", hover)],
-                  lightcolor=[("active", hover)], darkcolor=[("active", hover)])
-    # Compact buttons of the floating recording bar.
-    style.configure("Bar.TButton", padding=(8, 4))
-    style.configure("BarRecord.TButton", padding=(8, 4))
-    style.layout("BarRecord.TButton", style.layout("Record.TButton"))
-    for option in ("background", "foreground", "bordercolor", "lightcolor", "darkcolor", "font"):
-        style.configure("BarRecord.TButton", **{option: style.lookup("Record.TButton", option)})
-    style.map("BarRecord.TButton", **{option: style.map("Record.TButton", option)
-                                      for option in ("background", "foreground", "bordercolor",
-                                                     "lightcolor", "darkcolor")})
-    style.configure("Icon.TButton", padding=(8, 5), relief="flat", background=p["surface"], bordercolor=p["surface"],
-                    lightcolor=p["surface"], darkcolor=p["surface"], font=(ui, 11))
-    style.map("Icon.TButton", background=[("disabled", p["surface"]), ("active", p["hover"])],
-              foreground=[("disabled", p["disabled_text"])], bordercolor=[("active", p["border"])])
-    style.configure("Danger.TButton", foreground=p["danger_text"])
-    style.configure("Link.TButton", relief="flat", background=p["surface"], foreground=p["accent"], padding=(0, 4),
-                    bordercolor=p["surface"], lightcolor=p["surface"], darkcolor=p["surface"],
-                    font=(ui, 10, "bold"))
-    style.map("Link.TButton", background=[("active", p["surface"])], foreground=[("active", p["accent_text"])])
-    style.configure("TMenubutton", background=p["primary"], foreground="#ffffff", padding=(14, 7),
-                    relief="flat", arrowcolor="#ffffff", font=(ui, 10, "bold"),
-                    bordercolor=p["primary"], lightcolor=p["primary"], darkcolor=p["primary"])
-    style.map("TMenubutton", background=[("disabled", "#d0d5dd"), ("active", p["primary_hover"])])
-    style.configure("Secondary.TMenubutton", background=p["surface"], foreground=p["text"], padding=(14, 7),
-                    relief="raised", arrowcolor=p["muted"], font=(ui, 10),
-                    bordercolor=p["border_strong"], lightcolor=p["surface"], darkcolor=p["surface"])
-    style.map("Secondary.TMenubutton", background=[("disabled", p["surface"]), ("active", p["hover"])],
-              foreground=[("disabled", p["disabled_text"])])
-
-    field = {"fieldbackground": p["surface"], "bordercolor": p["border_strong"],
-             "lightcolor": p["surface"], "darkcolor": p["surface"], "padding": 6}
-    style.configure("TEntry", **field)
-    style.map("TEntry", bordercolor=[("focus", p["accent"])], lightcolor=[("focus", p["accent"])],
-              fieldbackground=[("disabled", p["hover"])], foreground=[("disabled", p["muted"])])
-    style.configure("Title.TEntry", **dict(field, padding=(8, 4)), font=(ui, 15, "bold"))
-    style.configure("TCombobox", **field, arrowcolor=p["muted"], background=p["surface"])
-    style.map("TCombobox", fieldbackground=[("readonly", p["surface"]), ("disabled", p["hover"])],
-              bordercolor=[("focus", p["accent"])], foreground=[("disabled", p["muted"])],
-              selectbackground=[("readonly", p["surface"])], selectforeground=[("readonly", p["text"])])
-    style.configure("TCheckbutton", background=p["surface"], font=(ui, 10), indicatorcolor=p["surface"])
-    style.map("TCheckbutton", indicatorcolor=[("selected", p["accent"])], background=[("active", p["surface"])])
-
-    style.configure("TNotebook", background=p["bg"], borderwidth=1, tabmargins=(0, 0, 0, 0),
-                    bordercolor=p["border"], lightcolor=p["bg"], darkcolor=p["bg"])
-    style.configure("TNotebook.Tab", background=p["bg"], foreground=p["muted"], padding=(18, 9),
-                    borderwidth=0, font=(ui, 10, "bold"), **{"lightcolor": p["bg"], "bordercolor": p["bg"]})
-    style.map("TNotebook.Tab", background=[("selected", p["surface"]), ("active", p["hover"])],
-              foreground=[("selected", p["accent"])], lightcolor=[("selected", p["surface"])],
-              bordercolor=[("selected", p["border"])])
-
-    style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"], foreground=p["text"],
-                    rowheight=row_height, font=(ui, 10), borderwidth=1, relief="flat",
-                    bordercolor=p["border"], lightcolor=p["surface"], darkcolor=p["surface"])
-    style.map("Treeview", background=[("selected", p["accent_soft"])], foreground=[("selected", p["accent_text"])])
-    style.configure("Treeview.Heading", background=p["surface"], foreground=p["muted"], relief="flat",
-                    font=(ui, 9, "bold"), padding=(6, 6), bordercolor=p["border"],
-                    lightcolor=p["surface"], darkcolor=p["surface"])
-    style.map("Treeview.Heading", background=[("active", p["hover"])])
-    style.configure("Vertical.TScrollbar", background=p["border"], troughcolor=p["surface"],
-                    bordercolor=p["surface"], lightcolor=p["border"], darkcolor=p["border"],
-                    arrowcolor=p["muted"], gripcount=0)
-    style.map("Vertical.TScrollbar", background=[("active", p["border_strong"])])
-    # Legacy LabelFrame styles stay readable if a section still uses them.
-    style.configure("TLabelframe", background=p["surface"], padding=12, bordercolor=p["border"])
-    style.configure("TLabelframe.Label", background=p["surface"], foreground=p["text"], font=(ui, 10, "bold"))
-    return style
-
-
 def render_icon(size: int) -> Image.Image:
-    """StepWatch icon (navy tile, report window, red watch), drawn at ``size``."""
+    """Icône StepWatch (tuile marine, fenêtre de rapport, montre rouge), dessinée à ``size``."""
     scale = 4
     s = size * scale / 128
     image = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
@@ -182,3 +218,45 @@ def render_icon(size: int) -> Image.Image:
     draw.line(box(88, 75, 88, 86), fill="white", width=max(1, round(4 * s)))
     draw.line(box(88, 86, 95, 90), fill="white", width=max(1, round(4 * s)))
     return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def qicon():
+    """Icône de fenêtre Qt (plusieurs tailles)."""
+    from PySide6.QtGui import QIcon
+
+    from .qtcompat import to_pixmap
+
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        icon.addPixmap(to_pixmap(render_icon(size)))
+    return icon
+
+
+def set_role(widget, role: str):
+    """Rôle lu par la feuille de style ; renvoie le widget pour chaîner."""
+    widget.setProperty("role", role)
+    style = widget.style()
+    if style is not None:
+        style.unpolish(widget)
+        style.polish(widget)
+    return widget
+
+
+def qpalette():
+    """Palette Qt assortie (traits et flèches dessinés par le style Fusion)."""
+    from PySide6.QtGui import QColor, QPalette
+
+    p = PALETTE
+    palette = QPalette()
+    roles = QPalette.ColorRole
+    for role, key in ((roles.Window, "bg"), (roles.WindowText, "text"), (roles.Base, "surface"),
+                      (roles.AlternateBase, "hover"), (roles.Text, "text"), (roles.Button, "surface"),
+                      (roles.ButtonText, "text"), (roles.Highlight, "accent"), (roles.ToolTipBase, "primary"),
+                      (roles.ToolTipText, "primary_text"), (roles.PlaceholderText, "muted"), (roles.Light, "border"),
+                      (roles.Midlight, "border"), (roles.Mid, "border_strong"), (roles.Dark, "border_strong"),
+                      (roles.Shadow, "border_strong"), (roles.Link, "accent")):
+        palette.setColor(role, QColor(p[key]))
+    palette.setColor(roles.HighlightedText, QColor("#ffffff"))
+    for role in (roles.WindowText, roles.Text, roles.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(p["disabled_text"]))
+    return palette

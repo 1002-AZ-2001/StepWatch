@@ -287,7 +287,7 @@ def main() -> int:
     # Exercise this checkout without requiring an editable package install.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from stepwatch.platform import enable_dpi_awareness
-    enable_dpi_awareness()  # Before creating any Tk window or hook.
+    enable_dpi_awareness()  # Before creating any window (Tk test target) or hook.
     if arguments.executable is None:
         native_smoke()
     else:

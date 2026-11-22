@@ -47,6 +47,8 @@ DEFAULTS: dict[str, Any] = {
     "keep_retired": True,
     "auto_standalone": False,
     "font_scale": 100,
+    "theme": "systeme",
+    "tray_icon": True,
     # Mises à jour (Paramètres › Général, menu Aide).
     "check_updates": True,
     "last_update_check": "",
@@ -57,6 +59,7 @@ DEFAULTS: dict[str, Any] = {
 CHOICES: dict[str, tuple] = {
     "bar_position": ("bas", "haut"),
     "font_scale": (90, 100, 115, 130),
+    "theme": ("systeme", "clair", "sombre"),
 }
 
 

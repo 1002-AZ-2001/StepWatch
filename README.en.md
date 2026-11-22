@@ -14,7 +14,7 @@ The application interface and the documentation in `docs/` are in French.
 | --- | --- |
 | Windows 10/11 | Local clicks and visual changes for a window, monitor or region. |
 | Linux X11 | Local clicks and visual changes for a visible window, monitor or region. |
-| Linux Wayland | Visual changes from the screen or window shared through the desktop portal. The app window uses XWayland. [Wayland setup in French](docs/distribution.md#wayland) |
+| Linux Wayland | Visual changes from the screen or window shared through the desktop portal. The Qt interface uses XWayland when installed (floating bar kept on top), and native Wayland otherwise. [Wayland setup in French](docs/distribution.md#wayland) |
 
 ![Guide editor: guide title, step list, title and description of the selected step](docs/stepwatch.png)
 
@@ -44,14 +44,14 @@ stepwatch --self-test
 
 ### From source, on Windows
 
-You need Windows 10/11 and Python 3.11 or later (3.12 recommended), installed with Tcl/Tk and pip. From the repository folder, in PowerShell:
+You need Windows 10/11 and Python 3.11 or later (3.12 recommended), with pip. From the repository folder, in PowerShell:
 
 ```powershell
 .\scripts\install.ps1
 .\scripts\launch.ps1
 ```
 
-`install.ps1` looks for Python 3.12, 3.13, then 3.11 with the `py` launcher, checks Tcl/Tk, then creates `.venv` with the versions in `requirements.txt`. To force an interpreter: `.\scripts\install.ps1 -Python "C:\Python312\python.exe"`. No script changes the PowerShell execution policy. If the policy blocks scripts, run directly:
+`install.ps1` looks for Python 3.12, 3.13, then 3.11 with the `py` launcher, then creates `.venv` with the versions in `requirements.txt`. To force an interpreter: `.\scripts\install.ps1 -Python "C:\Python312\python.exe"`. No script changes the PowerShell execution policy. If the policy blocks scripts, run directly:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -61,7 +61,7 @@ py -3.12 -m venv .venv
 
 ### From source, on Linux
 
-Use Python 3.11 or later with venv and Tkinter. For Wayland recording, also install the desktop capture dependencies. [Linux distribution guide in French](docs/distribution.md#linux--debian-ubuntu-et-arch-linux)
+Use Python 3.11 or later with venv; pip installs Qt (PySide6). Under X11, Qt also needs the system xcb libraries (Debian/Ubuntu: `libxcb-cursor0`, `libxkbcommon-x11-0`…). For Wayland recording, also install the desktop capture dependencies. [Linux distribution guide in French](docs/distribution.md#linux--debian-ubuntu-et-arch-linux)
 
 ```bash
 python3 -m venv .venv
@@ -130,9 +130,15 @@ If an antivirus or a sync tool briefly locks a file, the write is retried. If th
 
 ## Menus and settings
 
-The menu bar offers **Fichier** (File: open, recent guides, ShareX import, exports, **Paramètres…** settings, quit), **Enregistrement** (Recording: start Ctrl+R, pause, note, stop, refresh targets F5), **Guide** (undo, title, move, black out, remove), **Affichage** (View: tabs Ctrl+1/2/3, advanced settings) and **Aide** (Help: shortcuts F1, online documentation, report a problem, log and settings folders, installation check, **check for updates**, about). Unavailable entries are greyed out.
+The menu bar offers **Fichier** (File: open, recent guides, ShareX import, exports, **Paramètres…** settings, quit), **Enregistrement** (Recording: start Ctrl+R, pause, note, stop, refresh targets F5), **Guide** (undo, title, move, black out, remove), **Affichage** (View: tabs Ctrl+1/2/3, advanced settings, light/dark/system theme) and **Aide** (Help: shortcuts F1, online documentation, report a problem, log and settings folders, installation check, **check for updates**, about). Unavailable entries are greyed out.
 
-**Paramètres…** (Ctrl+,) sets: the suggested guide name with `{date}` and `{heure}` (time) placeholders, the guides folder, the floating bar and its position (bottom or top), Windows global shortcuts, a sound on each step, opening the Guide tab after stopping, an automatic standalone report after stopping, delete confirmation, keeping or erasing the screenshot of a removed step (erasing cannot be undone and is always confirmed), text size (next launch) and advanced settings shown at startup. **Réinitialiser** (Reset) restores the defaults and keeps recent guides.
+**Paramètres…** (Ctrl+,) sets: the suggested guide name with `{date}` and `{heure}` (time) placeholders, the guides folder, the floating bar and its position (bottom or top), Windows global shortcuts, a sound on each step, opening the Guide tab after stopping, an automatic standalone report after stopping, delete confirmation, keeping or erasing the screenshot of a removed step (erasing cannot be undone and is always confirmed), theme and text size (applied at once), advanced settings shown at startup and the notification area icon. **Réinitialiser** (Reset) restores the defaults and keeps recent guides.
+
+## Dark theme and notification area
+
+![Guide editor in the dark theme](docs/sombre.png)
+
+The theme follows the system by default; **Affichage › Thème** or **Paramètres › Interface** force light or dark. The notification area icon offers start, pause/resume, note, stop and quit without reopening the window (Windows, KDE, GNOME with the AppIndicator extension). Turn it off in **Paramètres › Interface**.
 
 ## Automatic updates
 
@@ -178,6 +184,6 @@ The images in this README show a demonstration session and report with synthetic
 
 Thanks to DokT for the first English translation.
 
-License: [GNU AGPL v3](LICENSE).
+License: [GNU AGPL v3](LICENSE). The interface uses [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/), under the LGPL v3: packages ship its libraries unmodified.
 
 References: [Steps Recorder deprecation](https://www.neowin.net/news/microsoft-deprecates-even-more-windows-features-steps-recorder-gets-the-axe/), [low-level mouse hooks](https://learn.microsoft.com/windows/win32/winmsg/lowlevelmouseproc), [mss](https://python-mss.readthedocs.io/), [pynput](https://pynput.readthedocs.io/), [Pillow](https://pillow.readthedocs.io/).

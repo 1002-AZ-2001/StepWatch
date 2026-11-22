@@ -1,58 +1,45 @@
-"""GUI integration checks on a real Tk display, with simulated capture backends.
+"""Fenêtre principale (Qt) avec un moteur de capture simulé.
 
-Opt in with STEPWATCH_GUI_TESTS=1 and a Windows desktop or DISPLAY (Xorg/Xvfb).
-These tests never claim to exercise actual capture APIs.
+Ces tests n'exercent jamais les API de capture réelles.
 """
 
 from concurrent.futures import Future
-import os
-import gc
 import json
 from pathlib import Path
 import queue
-import re
-import sys
 import tempfile
 import threading
-import time
-import tkinter as tk
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from PIL import Image, ImageTk
+import qt_helpers  # noqa: F401 - plateforme Qt hors écran, avant toute fenêtre
+from qt_helpers import close_app, default_backend, log_text, make_app, pump
+
+from PIL import Image
+from PySide6.QtCore import QRect
 
 from stepwatch.models import CaptureTarget, Rect
 from stepwatch.review import PAGE_SIZE, SessionReview
 from stepwatch.storage import ReportWriteError, SessionStore, StorageError
-from stepwatch.ui import StepWatchApp, run_app
+from stepwatch.ui import StepWatchApp, _log_unhandled, run_app
 
 
-@unittest.skipUnless(
-    os.environ.get("STEPWATCH_GUI_TESTS") == "1"
-    and (sys.platform == "win32" or os.environ.get("DISPLAY")),
-    "Interface : activer STEPWATCH_GUI_TESTS=1 avec un bureau Windows ou DISPLAY.",
-)
 class UITests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = tk.Tk()
-        self.backend = Mock()
-        self.backend.list_windows.return_value = [
-            CaptureTarget("window", "Bureau distant — Assistance", hwnd=123)
-        ]
+        self.backend = default_backend()
+        self.backend.list_windows.return_value = [CaptureTarget("window", "Bureau distant — Assistance", hwnd=123)]
         self.backend.list_monitors.return_value = [
             CaptureTarget("monitor", "Écran secondaire", rect=Rect(-1920, 0, 1920, 1080))
         ]
         self.backend.resolve.return_value = Rect(0, 0, 1280, 720)
         self.backend_factory = Mock(return_value=self.backend)
-        with patch("stepwatch.ui.capture_backend_factory", return_value=self.backend_factory):
-            self.app = StepWatchApp(self.root)
+        self.app = make_app(factory=self.backend_factory)
         self.app.output.set(self.temp.name)
-        self.root.update()
 
     def tearDown(self):
-        app, root = self.app, self.root
+        app = self.app
         errors = []
         try:
             if app._recorder is not None:
@@ -61,21 +48,16 @@ class UITests(unittest.TestCase):
                         errors.append("Le thread de capture n'est pas arrêté.")
                 except Exception as exc:
                     errors.append(f"Arrêt du moteur : {exc}")
+                app._recorder = None
             for name in ("_import_thread", "_export_thread"):
                 worker = getattr(app, name)
                 if isinstance(worker, threading.Thread):
                     worker.join(timeout=5)
                     if worker.is_alive():
                         errors.append(f"Thread {name} encore actif.")
-            app.dispose()
+            close_app(app)
         finally:
-            # A bound report_callback_exception keeps app/root/StringVars in
-            # a cycle even after destroy(). Tk8.6 aborts if a later worker
-            # happens to collect its Tcl interpreter. Release all fixture
-            # references first, then collect while still on the GUI thread.
-            self.app = self.root = self.backend = None
-            del app, root
-            gc.collect()
+            self.app = self.backend = None
             self.temp.cleanup()
         self.assertEqual(errors, [])
 
@@ -83,36 +65,44 @@ class UITests(unittest.TestCase):
         self.assertIsNone(self.app._recorder)
         self.assertEqual(self.app.state_text.get(), "Prêt")
         self.assertEqual(list(Path(self.temp.name).iterdir()), [])
-        self.assertIn("Bureau distant", self.app.target.get())
+        self.assertIn("Bureau distant", self.app.target_text())
         self.backend.list_windows.assert_called_once()
         self.backend.list_monitors.assert_not_called()
-        self.assertEqual(str(self.app.pause_button["state"]), "disabled")
+        self.assertFalse(self.app.pause_button.isEnabled())
 
     def test_refresh_keeps_window_identity_when_titles_match(self):
         first = CaptureTarget("window", "Assistance", hwnd=101)
         second = CaptureTarget("window", "Assistance", hwnd=202)
         self.backend.list_windows.return_value = [first, second]
         self.app._refresh_targets()
-        self.app.target_combo.current(1)
+        self.app.target_combo.setCurrentIndex(1)
         self.backend.list_windows.return_value = [second, first]
         self.app._refresh_targets()
         self.assertEqual(self.app._read_config()[0], second)
         self.backend.list_windows.return_value = [first]
         self.app._refresh_targets()
+        self.assertEqual(self.app.target_text(), "Sélectionnez une cible")
         self.app._refresh_targets()
         with self.assertRaisesRegex(ValueError, "Sélectionnez une fenêtre"):
             self.app._read_config()
 
+    def test_monitor_source_lists_monitors(self):
+        self.app.source.set("Moniteur")
+        self.app._refresh_targets()
+        self.assertIn("Écran secondaire", self.app.target_text())
+        self.assertEqual(self.app._read_config()[0].rect, Rect(-1920, 0, 1920, 1080))
+
     def test_custom_region_masks_and_french_decimal_settings(self):
         self.app.source.set("Zone personnalisée")
         self.app._refresh_targets()
+        self.assertFalse(self.app.region_frame.isHidden())
         for var, value in zip(self.app.region_values, ("-1920", "-100", "1000", "700")):
             var.set(value)
         self.app.interval.set("1,5")
         self.app.delay.set("0,25")
         self.app.sensitivity.set("0,4")
         self.app.conservative.set(True)
-        self.app.masks_text.insert("1.0", "10, 20, 30, 40\n50; 60; 70; 80\n")
+        self.app.masks_text.setPlainText("10, 20, 30, 40\n50; 60; 70; 80\n")
         target, config = self.app._read_config()
         self.assertEqual(target.rect, Rect(-1920, -100, 1000, 700))
         self.assertEqual(config.interval, 1.5)
@@ -121,12 +111,26 @@ class UITests(unittest.TestCase):
         self.assertTrue(config.conservative)
         self.assertEqual(config.masks, (Rect(10, 20, 30, 40), Rect(50, 60, 70, 80)))
 
+    def test_widgets_and_values_stay_in_sync(self):
+        line = self.app.region_values[0]
+        self.app.interval.set("2,5")
+        edits = [widget for widget in self.app._settings_widgets if hasattr(widget, "text")
+                 and callable(widget.text) and widget.text() == "2,5"]
+        self.assertTrue(edits)
+        edits[0].setText("3,0")
+        self.assertEqual(self.app.interval.get(), "3,0")
+        self.app.conservative_check.setChecked(True)
+        self.assertTrue(self.app.conservative.get())
+        self.app.mode_combo.setCurrentIndex(1)
+        self.assertEqual(self.app.mode.get(), "Clics locaux uniquement")
+        self.assertEqual(line.get(), "0")
+
     def test_invalid_mask_and_missing_target_are_actionable(self):
-        self.app.masks_text.insert("1.0", "10, 20, 30")
+        self.app.masks_text.setPlainText("10, 20, 30")
         with self.assertRaisesRegex(ValueError, "Masque ligne 1"):
             self.app._read_config()
-        self.app.masks_text.delete("1.0", "end")
-        self.app.target.set("Cible qui n’existe pas")
+        self.app.masks_text.setPlainText("")
+        self.app.target_combo.setCurrentIndex(-1)
         with self.assertRaisesRegex(ValueError, "Sélectionnez"):
             self.app._read_config()
 
@@ -135,14 +139,13 @@ class UITests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^Intervalle de comparaison : nombre attendu"):
             self.app._read_config()
         self.app.interval.set("1")
-        self.app.masks_text.insert("1.0", "1, 2, 3, 4\n10, 20, x, 40")
+        self.app.masks_text.setPlainText("1, 2, 3, 4\n10, 20, x, 40")
         with self.assertRaisesRegex(ValueError, "^Masque ligne 2 : nombre entier"):
             self.app._read_config()
-        self.app.masks_text.delete("1.0", "end")
-        self.app.masks_text.insert("1.0", "10, 20, 0, 40")
+        self.app.masks_text.setPlainText("10, 20, 0, 40")
         with self.assertRaisesRegex(ValueError, "^Masque ligne 1 : La largeur"):
             self.app._read_config()
-        self.app.masks_text.delete("1.0", "end")
+        self.app.masks_text.setPlainText("")
         self.app.source.set("Zone personnalisée")
         self.app._refresh_targets()
         self.app.region_values[2].set("large")
@@ -158,50 +161,50 @@ class UITests(unittest.TestCase):
         self.assertFalse(Path("rapports").exists())
 
     def test_window_fits_a_1366x768_screen(self):
-        with patch.object(self.root, "winfo_screenwidth", return_value=1366), \
-                patch.object(self.root, "winfo_screenheight", return_value=768):
-            self.app._fit_to_screen()
-        self.root.update()
-        width, height, x, y = map(int, re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)",
-                                                self.root.geometry()).groups())
-        self.assertLessEqual(x + width, 1366)
-        self.assertLessEqual(y + height, 768 - self.app._px(100))
-        min_width, min_height = self.root.minsize()
-        self.assertLessEqual(min_width, 1366)
-        self.assertLessEqual(min_height, 768 - self.app._px(100))
+        area = QRect(0, 0, 1366, 728)
+        self.app._fit_to_screen(area)
+        frame = self.app.root.geometry()
+        self.assertLessEqual(frame.x() + frame.width(), 1366)
+        self.assertLessEqual(frame.y() + frame.height(), 728)
+        self.assertLessEqual(self.app.root.minimumWidth(), 1366)
+        self.assertLessEqual(self.app.root.minimumHeight(), 728)
 
-    def test_pixel_dimensions_follow_dpi(self):
-        top = tk.Toplevel(self.root)
-        with patch.object(top, "winfo_fpixels", return_value=144.0), \
-                patch("stepwatch.ui.capture_backend_factory", return_value=self.backend_factory):
-            app = StepWatchApp(top)
-        try:
-            self.assertEqual(app._px(420), 630)
-            canvases = []
-            pending = [top]
-            while pending:
-                widget = pending.pop()
-                pending.extend(widget.winfo_children())
-                if isinstance(widget, tk.Canvas):
-                    canvases.append(int(widget["width"]))
-            self.assertIn(630, canvases)
-            expected = min(app._px(1020), top.winfo_screenwidth() - app._px(40))
-            self.assertEqual(top.minsize()[0], expected)
-        finally:
-            top.after_cancel(app._poll_id)
-            top.destroy()
+    def test_native_rect_converts_scaled_coordinates_to_physical_pixels(self):
+        screen = Mock()
+        screen.devicePixelRatio.return_value = 1.5
+        screen.geometry.return_value = QRect(1920, 0, 1707, 960)
+        widget = Mock()
+        widget.frameGeometry.return_value = QRect(2020, 100, 400, 200)
+        widget.screen.return_value = screen
+        self.assertEqual(StepWatchApp._native_rect(widget), Rect(2070, 150, 600, 300))
+        widget.frameGeometry.return_value = QRect(0, 0, 1, 1)
+        self.assertIsNone(StepWatchApp._native_rect(widget))
 
     def test_preview_and_counters_update_on_main_thread(self):
         self.app._handle_event({
             "type": "saved", "image": Image.new("RGB", (640, 360), "#2868a1"),
             "kept": 7, "ignored": 3, "message": "Capture de test conservée.",
         })
-        self.root.update()
+        pump()
         self.assertEqual(self.app.kept.get(), "7")
         self.assertEqual(self.app.ignored.get(), "3")
-        self.assertIsNotNone(self.app._photo)
-        self.assertTrue(self.app.preview["image"])
-        self.assertIn("Capture de test", self.app.log.get("1.0", "end"))
+        self.assertTrue(self.app.preview.has_image)
+        pixmap = self.app.preview.pixmap()
+        self.assertFalse(pixmap.isNull())
+        self.assertLessEqual(pixmap.width() / pixmap.devicePixelRatio(), self.app.preview.width())
+        self.assertIn("Capture de test", log_text(self.app))
+
+    def test_large_preview_is_scaled_to_the_label(self):
+        self.app.root.resize(1190, 800)
+        pump()
+        self.app._handle_event({"type": "saved", "image": Image.new("RGB", (3200, 1800), "red"),
+                                "kept": 1, "ignored": 0, "message": "Capture"})
+        pump()
+        pixmap = self.app.preview.pixmap()
+        ratio = pixmap.devicePixelRatio()
+        self.assertLessEqual(pixmap.width() / ratio, self.app.preview.width())
+        self.assertLessEqual(pixmap.height() / ratio, self.app.preview.height())
+        self.assertEqual(pixmap.toImage().pixelColor(5, 5).name(), "#ff0000")
 
     def test_reopen_session_pages_metadata_and_reads_only_selected_images(self):
         store = SessionStore(Path(self.temp.name), "Guide de test")
@@ -213,27 +216,20 @@ class UITests(unittest.TestCase):
         manifest.write_text(json.dumps(data), encoding="utf-8")
 
         def wait_image(color):
-            deadline = time.monotonic() + 4
-            while time.monotonic() < deadline:
-                self.root.update()
-                self.app._poll()
-                image = self.app._review._image
-                if image is not None and image.getpixel((0, 0)) == color:
-                    return
-                time.sleep(.01)
-            self.fail("L’aperçu de l’étape sélectionnée n’a pas été chargé.")
+            pump(lambda: self.app._review._image is not None and self.app._review._image.getpixel((0, 0)) == color,
+                 timeout=4, app=self.app, message="L’aperçu de l’étape sélectionnée n’a pas été chargé.")
 
-        self.app._tabs.select(self.app._review)
+        self.app._tabs.setCurrentWidget(self.app._review)
         with patch("stepwatch.ui.filedialog.askdirectory", return_value=str(store.directory)), \
                 patch("stepwatch.review.Image.open", wraps=Image.open) as opened:
             self.app._choose_session()
             wait_image((255, 0, 0))
-            self.assertEqual(len(self.app._review.list.get_children()), PAGE_SIZE)
+            self.assertEqual(self.app._review.list.topLevelItemCount(), PAGE_SIZE)
             self.assertEqual(self.app._session_dir, store.directory)
-            self.assertIn("Première étape", self.app._review.annotation.get("1.0", "end"))
-            self.app._review.next.invoke()
+            self.assertIn("Première étape", self.app._review.annotation.toPlainText())
+            self.app._review.next.click()
             wait_image((0, 0, 255))
-            self.assertEqual(len(self.app._review.list.get_children()), 1)
+            self.assertEqual(self.app._review.list.topLevelItemCount(), 1)
             self.assertEqual(opened.call_count, 2)
         self.assertEqual(json.loads(manifest.read_text(encoding="utf-8")), data)
 
@@ -245,53 +241,16 @@ class UITests(unittest.TestCase):
         self.app._poll()
         self.assertTrue(recorder.events.empty())
         self.assertEqual(self.app.kept.get(), "2")
-        self.assertIn("Erreur d’affichage ignorée", self.app.log.get("1.0", "end"))
-        self.assertIn("Événement suivant", self.app.log.get("1.0", "end"))
-        self.assertIsNotNone(self.app._poll_id)
+        self.assertIn("Erreur d’affichage ignorée", log_text(self.app))
+        self.assertIn("Événement suivant", log_text(self.app))
+        self.assertTrue(self.app._timer.isActive())
         self.app._recorder = None
 
-    def test_direct_poll_calls_keep_a_single_polling_loop(self):
+    def test_direct_poll_calls_keep_a_single_polling_timer(self):
         self.app._poll()
         self.app._poll()
-        scripts = [self.root.tk.splitlist(self.root.tk.call("after", "info", event))[0]
-                   for event in self.root.tk.splitlist(self.root.tk.call("after", "info"))]
-        self.assertEqual(sum(script.endswith("_poll") for script in scripts), 1)
-
-    def test_preview_requested_size_does_not_follow_the_image(self):
-        self.root.geometry("1190x820")
-        self.root.update()
-        initial_requested_height = self.app.preview.winfo_reqheight()
-        renders = []
-        real_photo = ImageTk.PhotoImage
-
-        def photo(*args, **kwargs):
-            renders.append(args[0].size)
-            return real_photo(*args, **kwargs)
-
-        with patch("stepwatch.ui.ImageTk.PhotoImage", photo):
-            self.app._handle_event({"type": "saved", "image": Image.new("RGB", (1600, 900), "#2868a1"),
-                                    "kept": 1, "ignored": 0, "message": "Capture"})
-            for _ in range(10):
-                self.root.update()
-        self.assertLessEqual(self.app.preview.winfo_reqheight(), initial_requested_height)
-        self.assertLessEqual(len(renders), 2)
-        width, height = renders[-1]
-        self.assertLessEqual(width, self.app.preview.winfo_width())
-        self.assertLessEqual(height, self.app.preview.winfo_height())
-
-    def test_hidden_capture_preview_renders_only_the_latest_image_on_return(self):
-        first = Image.new("RGB", (600, 400), "red")
-        last = Image.new("RGB", (600, 400), "blue")
-        with patch("stepwatch.ui.ImageTk.PhotoImage", wraps=ImageTk.PhotoImage) as rendered:
-            self.app._tabs.select(self.app._review)
-            self.root.update()
-            self.app._handle_event({"type": "saved", "image": first})
-            self.app._handle_event({"type": "saved", "image": last})
-            rendered.assert_not_called()
-            self.app._tabs.select(0)
-            self.root.update()
-            rendered.assert_called_once()
-            self.assertEqual(rendered.call_args.args[0].getpixel((0, 0)), (0, 0, 255))
+        self.assertTrue(self.app._timer.isActive())
+        self.assertTrue(self.app._timer.isSingleShot())
 
     def test_start_shows_events_left_by_previous_recording(self):
         previous = Mock(state="stopped", events=queue.Queue())
@@ -314,10 +273,11 @@ class UITests(unittest.TestCase):
                 self.store.close()
                 return True
 
+        self.app.compact.set(False)
         with patch("stepwatch.ui.Recorder", StartedRecorder):
             self.app._start()
         self.assertTrue(previous.events.empty())
-        self.assertIn("Erreur d’écriture du rapport", self.app.log.get("1.0", "end"))
+        self.assertIn("Erreur d’écriture du rapport", log_text(self.app))
         self.assertEqual(len(started), 1)
         self.assertIs(started[0].backend_factory, self.backend_factory)
         self.assertEqual(self.app.kept.get(), "0")
@@ -325,19 +285,19 @@ class UITests(unittest.TestCase):
         self.app._recorder = None
 
     def test_standalone_export_runs_in_background_and_is_logged(self):
-        self.assertEqual(str(self.app.export_button["state"]), "disabled")
+        self.assertFalse(self.app.export_button.isEnabled())
         store = SessionStore(Path(self.temp.name), "Export")
         store.save(Image.new("RGB", (8, 8), "red"), "initial")
         store.close()
         self.app._session_dir = store.directory
         self.app._update_controls()
-        self.assertEqual(str(self.app.export_button["state"]), "normal")
+        self.assertTrue(self.app.export_button.isEnabled())
         self.app._export_standalone()
         self.app._export_thread.join(5)
         self.app._poll()
-        self.assertIn("Rapport autonome :", self.app.log.get("1.0", "end"))
+        self.assertIn("Rapport autonome :", log_text(self.app))
         self.assertTrue((store.directory / "rapport-autonome.html").is_file())
-        self.assertIn("Rapport Markdown :", self.app.log.get("1.0", "end"))
+        self.assertIn("Rapport Markdown :", log_text(self.app))
         self.assertTrue((store.directory / "rapport.md").is_file())
 
     def test_export_retries_current_sessions_failed_final_report_flush(self):
@@ -399,33 +359,31 @@ class UITests(unittest.TestCase):
         self.app._export_thread = None
 
     def test_unavailable_capture_leaves_import_enabled_and_creates_no_session(self):
-        top = tk.Toplevel(self.root)
         with patch("stepwatch.ui.capture_backend_factory", return_value=None):
-            app = StepWatchApp(top)
+            app = StepWatchApp()
         try:
             app.output.set(self.temp.name)
-            self.assertEqual(str(app.start_button["state"]), "disabled")
-            self.assertEqual(str(app.import_button["state"]), "normal")
+            self.assertFalse(app.start_button.isEnabled())
+            self.assertTrue(app.import_button.isEnabled())
             with patch("stepwatch.ui.messagebox.showerror") as error:
                 app._start()
             error.assert_called_once()
             self.assertIn("indisponible", error.call_args.args[1])
             self.assertIsNone(app._recorder)
         finally:
-            app.dispose()
+            close_app(app)
         self.assertEqual(list(Path(self.temp.name).iterdir()), [])
 
     def test_portal_selection_leaves_stop_available_and_uses_visual_mode(self):
-        top = tk.Toplevel(self.root)
         backend = Mock(uses_portal=True)
         factory = Mock(return_value=backend)
-        with patch("stepwatch.ui.capture_backend_factory", return_value=factory):
-            app = StepWatchApp(top)
+        app = make_app(factory=factory)
         try:
             app.output.set(self.temp.name)
             app.mode.set("Clics locaux uniquement")
             app.delay.set("champ inutilisé")
-            app.masks_text.insert("1.0", "0,0,40,40")
+            app._show_advanced(True)
+            app.masks_text.setPlainText("0,0,40,40")
             recorder = Mock(state="starting", events=queue.Queue())
             with patch("stepwatch.ui.Recorder", return_value=recorder) as recording:
                 app._start()
@@ -438,32 +396,35 @@ class UITests(unittest.TestCase):
             backend.list_monitors.assert_not_called()
             backend.resolve.assert_not_called()
             self.assertIn("à partager", app.state_text.get())
-            self.assertEqual(str(app.start_button["state"]), "disabled")
-            self.assertEqual(str(app.pause_button["state"]), "disabled")
-            self.assertEqual(str(app.stop_button["state"]), "normal")
+            self.assertFalse(app.start_button.isEnabled())
+            self.assertFalse(app.pause_button.isEnabled())
+            self.assertTrue(app.stop_button.isEnabled())
             app._stop()
             recorder.stop.assert_called_once_with(timeout=0)
+            app._recorder = None
         finally:
-            app.dispose()
+            close_app(app)
 
-    def test_run_app_stops_recording_when_tk_loop_is_interrupted(self):
+    def test_run_app_stops_recording_when_the_event_loop_is_interrupted(self):
         recorder = Mock(state="recording", events=queue.Queue())
         self.app._recorder = recorder
-        with patch("stepwatch.ui.tk.Tk", return_value=self.root), \
+        fake_qapp = Mock()
+        fake_qapp.exec.side_effect = KeyboardInterrupt
+        with patch("stepwatch.ui.application", return_value=fake_qapp), \
                 patch("stepwatch.ui.StepWatchApp", return_value=self.app), \
-                patch.object(self.root, "mainloop", side_effect=KeyboardInterrupt):
+                patch("stepwatch.ui.Preferences"):
             with self.assertRaises(KeyboardInterrupt):
                 run_app()
         recorder.stop.assert_called_once()
+        self.assertTrue(self.app._disposed)
         self.app._recorder = None
 
-    def test_tk_callback_errors_reach_the_journal_and_the_diagnostic_log(self):
+    def test_unhandled_callback_errors_reach_the_diagnostic_log(self):
         with self.assertLogs("stepwatch.ui", level="ERROR") as logs:
             try:
                 raise ValueError("rappel cassé")
             except ValueError as exc:
-                self.root.report_callback_exception(type(exc), exc, exc.__traceback__)
-        self.assertIn("Erreur interne : rappel cassé", self.app.log.get("1.0", "end"))
+                _log_unhandled(type(exc), exc, exc.__traceback__)
         self.assertIsNotNone(logs.records[0].exc_info)
 
     def test_journal_is_mirrored_without_flooding_ignored_comparisons(self):
@@ -480,14 +441,11 @@ class UITests(unittest.TestCase):
                                   "Capture enregistrée.": "INFO"})
 
     def test_diagnostic_log_location_is_shown_at_startup(self):
-        top = tk.Toplevel(self.root)
-        with patch("stepwatch.ui.capture_backend_factory", return_value=self.backend_factory):
-            app = StepWatchApp(top, Path("/journal/stepwatch.log"))
+        app = make_app(log_path=Path("/journal/stepwatch.log"))
         try:
-            self.assertIn("Journal de diagnostic : ", app.log.get("1.0", "end"))
+            self.assertIn("Journal de diagnostic : ", log_text(app))
         finally:
-            top.after_cancel(app._poll_id)
-            top.destroy()
+            close_app(app)
 
     def test_recorder_controls_and_graceful_close(self):
         class FakeRecorder:
@@ -496,6 +454,7 @@ class UITests(unittest.TestCase):
             def __init__(self):
                 self.events = queue.Queue()
                 self.stop_calls = []
+                self.notes = []
 
             def pause(self):
                 self.state = "paused"
@@ -512,35 +471,41 @@ class UITests(unittest.TestCase):
                 self.notes.append(text)
 
         recorder = FakeRecorder()
-        recorder.notes = []
-        self.assertEqual(str(self.app.note_button["state"]), "disabled")
+        self.assertFalse(self.app.note_button.isEnabled())
         recorder.state = "recording"
         self.app._recorder = recorder
         self.app._update_controls()
-        self.assertEqual(str(self.app.start_button["state"]), "disabled")
-        self.assertEqual(str(self.app.note_button["state"]), "normal")
+        self.assertFalse(self.app.start_button.isEnabled())
+        self.assertTrue(self.app.note_button.isEnabled())
         with patch("stepwatch.ui.simpledialog.askstring", return_value="Câble réseau débranché"):
             self.app._add_note()
         with patch("stepwatch.ui.simpledialog.askstring", return_value=None):
-            self.app._add_note()  # Cancelled dialog: nothing is sent.
+            self.app._add_note()  # Dialogue annulé : rien n'est envoyé.
         self.assertEqual(recorder.notes, ["Câble réseau débranché"])
         self.app._pause()
         self.assertEqual(recorder.state, "paused")
-        self.assertEqual(str(self.app.resume_button["state"]), "normal")
+        self.assertTrue(self.app.resume_button.isEnabled())
         self.app._resume()
         self.assertEqual(recorder.state, "recording")
         with patch("stepwatch.ui.messagebox.askyesno", return_value=True):
             self.app._close()
         self.assertTrue(recorder.stop_calls)
         self.assertTrue(all(timeout == 0 for timeout in recorder.stop_calls))
+        self.assertTrue(self.app._disposed)
         self.backend.close.assert_called_once()
+
+    def test_main_window_close_button_goes_through_the_graceful_close(self):
+        with patch.object(self.app, "_close") as close:
+            self.app.root.close()
+            pump(lambda: close.called)
+        self.assertFalse(self.app._disposed)
 
 
 class ReviewShutdownTests(unittest.TestCase):
     def test_finished_io_timeout_does_not_block_shutdown(self):
         finished = Future()
         finished.set_exception(TimeoutError("Lecture en échec"))
-        review = SimpleNamespace(_running=(1, "preview", None, finished), _executor=Mock())
+        review = SimpleNamespace(_running=(1, "preview", None, finished), _executor=Mock(), _pending=None)
 
         self.assertTrue(SessionReview.shutdown(review, timeout=0))
         self.assertIsNone(review._running)
@@ -548,34 +513,36 @@ class ReviewShutdownTests(unittest.TestCase):
 
 
 class ShutdownTests(unittest.TestCase):
-    """Failure paths that do not need a display or actual Windows resources."""
+    """Chemins d'échec qui n'ont besoin ni d'affichage ni de ressources Windows."""
 
     def setUp(self):
         self.app = StepWatchApp.__new__(StepWatchApp)
-        self.app.root = Mock()
         self.app._recorder = Mock(state="stopping")
         self.app._write_log = Mock()
         self.app._update_controls = Mock()
         self.app._background_running = Mock(return_value=False)
-        self.app._backend = Mock()
-        self.app._poll_id = None
+        self.app._review = Mock()
+        self.app._review.shutdown.return_value = True
+        self.app._import_thread = self.app._export_thread = None
         self.app._close_error = None
         self.app._closing = True
+        self.app._disposed = False
+        self.app.dispose = Mock()
 
     def test_finish_close_retries_after_exception_and_waits_for_real_completion(self):
         self.app._recorder.stop.side_effect = (OSError("verrou passager"), False, True)
-        with self.assertLogs("stepwatch.ui", level="ERROR") as logs:
+        with patch("stepwatch.ui.QTimer.singleShot") as retry:
+            with self.assertLogs("stepwatch.ui", level="ERROR") as logs:
+                self.app._finish_close()
+            self.assertIn("Fermeture incomplète", logs.output[0])
+            self.app.dispose.assert_not_called()
+            self.assertEqual(retry.call_count, 1)
             self.app._finish_close()
-        self.assertIn("Fermeture incomplète", logs.output[0])
-        self.app.root.destroy.assert_not_called()
-        self.assertEqual(self.app.root.after.call_count, 1)
-        self.app._finish_close()
-        self.app.root.destroy.assert_not_called()
-        self.assertEqual(self.app.root.after.call_count, 2)
-        self.app._finish_close()
-        self.app.root.destroy.assert_called_once()
-        self.app._backend.close.assert_called_once()
-        self.assertEqual(self.app.root.after.call_count, 2)
+            self.app.dispose.assert_not_called()
+            self.assertEqual(retry.call_count, 2)
+            self.app._finish_close()
+            self.app.dispose.assert_called_once()
+            self.assertEqual(retry.call_count, 2)
 
     def test_shutdown_timeout_is_reported_without_claiming_success(self):
         self.app._recorder.stop.return_value = False
@@ -583,7 +550,7 @@ class ShutdownTests(unittest.TestCase):
             self.assertFalse(self.app.shutdown(timeout=.01))
         self.assertIn("thread de capture est encore actif", logs.output[0])
         self.app._recorder.stop.assert_called_once_with(timeout=.01)
-        self.app.root.destroy.assert_not_called()
+        self.app.dispose.assert_not_called()
 
     def test_shutdown_exception_is_logged_with_traceback(self):
         self.app._recorder.stop.side_effect = OSError("écriture impossible")

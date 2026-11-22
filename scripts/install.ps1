@@ -16,8 +16,8 @@ function Invoke-Checked {
     }
 }
 
-# Vrai si l'interpréteur existe, est en version 3.11 ou ultérieure et fournit
-# Tcl/Tk. Toute erreur (lanceur sans cette version, alias du Microsoft Store,
+# Vrai si l'interpréteur existe et est en version 3.11 ou ultérieure (l'interface
+# Qt est installée par pip avec PySide6). Toute erreur (lanceur sans cette version, alias du Microsoft Store,
 # sortie d'erreur convertie en exception par PowerShell 5.1) vaut « non ».
 function Test-SupportedPython {
     param([string]$Command, [string[]]$Arguments = @())
@@ -25,7 +25,7 @@ function Test-SupportedPython {
         return $false
     }
     try {
-        & $Command @Arguments -c "import sys, tkinter; sys.exit(0 if sys.version_info >= (3, 11) else 1)" *> $null
+        & $Command @Arguments -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" *> $null
         return ($LASTEXITCODE -eq 0)
     } catch {
         return $false
@@ -57,14 +57,14 @@ try {
         }
         if ($null -eq $Selected) {
             if ($Python) {
-                throw "$Python n'est pas un Python 3.11 ou ultérieur avec Tcl/Tk."
+                throw "$Python n'est pas un Python 3.11 ou ultérieur."
             }
-            throw "Python 3.11 ou ultérieur avec Tcl/Tk introuvable. Installez Python 3.12 depuis python.org, puis relancez ce script ou indiquez -Python <chemin de python.exe>."
+            throw "Python 3.11 ou ultérieur introuvable. Installez Python 3.12 depuis python.org, puis relancez ce script ou indiquez -Python <chemin de python.exe>."
         }
         Invoke-Checked -Command $Selected.Command -Arguments ($Selected.Arguments + @("-m", "venv", ".venv"))
     }
     if (-not (Test-SupportedPython -Command $VenvPython)) {
-        throw "Le dossier .venv utilise un Python antérieur à 3.11 ou sans Tcl/Tk. Supprimez le dossier .venv, puis relancez ce script."
+        throw "Le dossier .venv utilise un Python antérieur à 3.11. Supprimez le dossier .venv, puis relancez ce script."
     }
     Invoke-Checked -Command $VenvPython -Arguments @("-m", "pip", "install", "-r", "requirements.txt")
     Invoke-Checked -Command $VenvPython -Arguments @("-m", "pip", "check")

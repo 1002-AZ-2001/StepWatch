@@ -67,10 +67,12 @@ class DebianPackagingTests(unittest.TestCase):
 
     def test_build_host_x11_and_font_libraries_are_left_to_the_target_system(self):
         internal = self.bundle / "_internal"
-        system = ("libfontconfig.so.1", "libfreetype.so.6", "libX11.so.6", "libXft.so.2",
-                  "libxcb-shm.so.0", "libexpat.so.1", "libpng16.so.16", "libbrotlicommon.so.1")
-        kept = ("libfreetype-57f805ba.so.6.20.6", "libxcb-9065bb12.so.1.1.0", "libtk8.6.so",
-                "libpython3.12.so.1.0", "libstdc++.so.6")
+        system = ("libfontconfig.so.1", "libfreetype.so.6", "libX11.so.6", "libX11-xcb.so.1",
+                  "libxcb-shm.so.0", "libxcb-render-util.so.0", "libxkbcommon-x11.so.0", "libexpat.so.1",
+                  "libpng16.so.16", "libbrotlicommon.so.1", "libglib-2.0.so.0", "libdbus-1.so.3",
+                  "libwayland-client.so.0")
+        kept = ("libfreetype-57f805ba.so.6.20.6", "libxcb-9065bb12.so.1.1.0", "libQt6Core.so.6",
+                "libicuuc.so.73", "libpython3.12.so.1.0", "libstdc++.so.6")
         for name in system + kept:
             (internal / name).write_bytes(b"ELF placeholder")
         stage = self.root / "stage"
@@ -78,7 +80,50 @@ class DebianPackagingTests(unittest.TestCase):
         staged = {path.name for path in (stage / "opt/stepwatch/_internal").iterdir()}
         self.assertFalse(staged & set(system))
         self.assertTrue(set(kept) <= staged)
-        self.assertIn("libxft2", packaging.DEPENDENCIES)
+        for dependency in ("libxcb-cursor0", "libxkbcommon-x11-0", "libwayland-client0", "libegl1"):
+            self.assertIn(dependency, packaging.DEPENDENCIES)
+
+    @unittest.skipUnless(os.name == "posix", "Paquet Linux : liens symboliques relatifs POSIX")
+    def test_unused_qt_plugins_translations_and_orphan_libraries_are_pruned(self):
+        internal = self.bundle / "_internal"
+        qt = internal / "PySide6" / "Qt"
+        files = {
+            "_internal/PySide6/Qt/plugins/platforms/libqxcb.so": {"libQt6XcbQpa.so.6"},
+            "_internal/PySide6/Qt/plugins/platforms/libqvnc.so": {"libvnc.so.1"},
+            "_internal/PySide6/Qt/plugins/platformthemes/libqgtk3.so": {"libgtk-3.so.0"},
+            "_internal/PySide6/Qt/plugins/wayland-shell-integration/libxdg-shell.so": set(),
+            "_internal/PySide6/Qt/lib/libQt6XcbQpa.so.6": {"libQt6Gui.so.6"},
+            "_internal/PySide6/Qt/lib/libQt6Gui.so.6": set(),
+            "_internal/libvnc.so.1": set(),
+            "_internal/libgtk-3.so.0": {"libgdk-3.so.0"},
+            "_internal/libgdk-3.so.0": set(),
+            "_internal/libpython3.12.so.1.0": set(),
+            "_internal/PySide6/QtWidgets.abi3.so": {"libQt6Gui.so.6"},
+            "_internal/PySide6/Qt/translations/qtbase_fr.qm": None,
+            "_internal/PySide6/Qt/translations/qtbase_de.qm": None,
+        }
+        for name in files:
+            path = self.bundle / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"ELF placeholder")
+        (internal / "libQt6Gui.so.6").symlink_to("PySide6/Qt/lib/libQt6Gui.so.6")
+        (internal / "libgtk-link.so.0").symlink_to("libgtk-3.so.0")
+        needed = {str(self.bundle / name): value or set() for name, value in files.items()}
+        with patch.object(packaging, "_needed", side_effect=lambda path: needed.get(str(path), set())):
+            removed = packaging.prune_qt_bundle(self.bundle)
+        remaining = {path.relative_to(self.bundle).as_posix() for path in self.bundle.rglob("*") if path.is_file()}
+        for name in ("plugins/platforms/libqxcb.so", "plugins/wayland-shell-integration/libxdg-shell.so",
+                     "lib/libQt6XcbQpa.so.6", "lib/libQt6Gui.so.6", "translations/qtbase_fr.qm"):
+            self.assertIn(f"_internal/PySide6/Qt/{name}", remaining)
+        self.assertIn("_internal/libpython3.12.so.1.0", remaining)
+        for name in ("_internal/libvnc.so.1", "_internal/libgtk-3.so.0", "_internal/libgdk-3.so.0",
+                     "_internal/PySide6/Qt/plugins/platforms/libqvnc.so",
+                     "_internal/PySide6/Qt/translations/qtbase_de.qm"):
+            self.assertNotIn(name, remaining)
+            self.assertIn(name, removed)
+        self.assertFalse((internal / "libgtk-link.so.0").is_symlink())
+        self.assertTrue((internal / "libQt6Gui.so.6").exists())
+        self.assertFalse((qt / "plugins" / "platformthemes").exists())
 
     @unittest.skipUnless(os.name == "posix", "FIFO on POSIX")
     def test_rejects_special_files(self):

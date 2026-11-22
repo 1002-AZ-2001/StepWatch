@@ -1,6 +1,5 @@
 """Wayland/X11 session checks and the packaged self-test."""
 
-import os
 import sys
 import tempfile
 import unittest
@@ -10,21 +9,19 @@ from unittest.mock import patch
 from stepwatch import selftest
 from stepwatch.display import WINDOW_CLASS, display_problem, session_type
 
-GUI_TESTS = os.environ.get("STEPWATCH_GUI_TESTS") == "1" and bool(os.environ.get("DISPLAY"))
+import qt_helpers  # noqa: E402,F401 - plateforme Qt hors écran, avant toute fenêtre
 
 
 class DisplayTests(unittest.TestCase):
-    def test_x11_and_xwayland_sessions_can_start_tk(self):
+    def test_x11_and_wayland_sessions_can_start_qt(self):
         self.assertIsNone(display_problem("linux", {"DISPLAY": ":0"}))
         # Wayland session with XWayland: compositors export both variables.
         self.assertIsNone(display_problem("linux", {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"}))
 
-    def test_wayland_without_xwayland_names_the_package_to_install(self):
-        message = display_problem("linux", {"WAYLAND_DISPLAY": "wayland-0"})
-        self.assertIn("XWayland", message)
-        self.assertIn("xwayland", message)
-        self.assertIn("xorg-xwayland", message)
-        self.assertIn("XWayland", display_problem("linux", {"XDG_SESSION_TYPE": "wayland"}))
+    def test_native_wayland_without_xwayland_is_accepted(self):
+        self.assertIsNone(display_problem("linux", {"WAYLAND_DISPLAY": "wayland-0"}))
+        message = display_problem("linux", {"XDG_SESSION_TYPE": "wayland"})
+        self.assertIn("WAYLAND_DISPLAY", message)
 
     def test_no_graphical_session_is_explained(self):
         self.assertIn("Aucun affichage", display_problem("linux", {}))
@@ -40,10 +37,12 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(session_type({"DISPLAY": ":0"}), "x11")
         self.assertEqual(session_type({"XDG_SESSION_TYPE": "tty"}), "inconnue")
 
-    def test_desktop_file_matches_the_tk_window_class(self):
+    def test_desktop_file_matches_the_qt_window_class(self):
         desktop = Path(__file__).resolve().parents[1] / "packaging" / "linux" / "stepwatch.desktop"
-        # Tk capitalises the first letter of className to build WM_CLASS.
-        self.assertIn(f"StartupWMClass={WINDOW_CLASS.capitalize()}\n", desktop.read_text(encoding="utf-8"))
+        # Qt utilise le nom de l'application comme classe X11 (WM_CLASS) et app_id Wayland.
+        self.assertIn(f"StartupWMClass={WINDOW_CLASS}\n", desktop.read_text(encoding="utf-8"))
+        from stepwatch.qtcompat import APP_ID
+        self.assertEqual(APP_ID, WINDOW_CLASS)
 
 
 class SelfTestTests(unittest.TestCase):
@@ -58,7 +57,7 @@ class SelfTestTests(unittest.TestCase):
         with patch("stepwatch.selftest.display_problem", return_value="Aucun affichage graphique"):
             self.assertEqual(selftest.run(messages.append), 0)
         self.assertIn("Images, rapports, notes et import ShareX : OK", messages)
-        self.assertTrue(any(m.startswith("Interface Tk : non vérifiée") for m in messages))
+        self.assertTrue(any(m.startswith("Interface Qt : non vérifiée") for m in messages))
         self.assertEqual(messages[-1], "Auto-test réussi.")
 
     def test_run_reports_failures_with_exit_code_1(self):
@@ -67,11 +66,12 @@ class SelfTestTests(unittest.TestCase):
             self.assertEqual(selftest.run(messages.append), 1)
         self.assertIn("Auto-test en échec : masque non appliqué", messages)
 
-    @unittest.skipUnless(GUI_TESTS, "STEPWATCH_GUI_TESTS=1 et un affichage X11 requis")
     def test_interface_check_opens_and_closes_the_real_window(self):
+        if display_problem():
+            self.skipTest("Aucun affichage : l'auto-test ne vérifie pas l'interface.")
         messages = []
         self.assertEqual(selftest.run(messages.append), 0)
-        self.assertIn("Interface Tk : OK", messages)
+        self.assertIn("Interface Qt : OK", messages)
         if sys.platform.startswith("linux") and session_type() == "x11":
             self.assertIn("Capture X11 : OK", messages)
 

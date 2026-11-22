@@ -234,7 +234,9 @@ class BackendSelectionTests(unittest.TestCase):
         self.assertIs(capture_backend_factory("linux", {
             "DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "x11",
         }), WaylandBackend)
-        self.assertIsNone(capture_backend_factory("linux", {"WAYLAND_DISPLAY": "wayland-0"}))
+        # Wayland natif sans XWayland : le portail suffit.
+        self.assertIs(capture_backend_factory("linux", {"WAYLAND_DISPLAY": "wayland-0"}), WaylandBackend)
+        self.assertIsNone(capture_backend_factory("linux", {}))
         self.assertIsNone(capture_backend_factory("darwin", {"DISPLAY": ":0"}))
 
 

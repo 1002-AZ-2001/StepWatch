@@ -2,9 +2,9 @@
 """Check StepWatch in a real Wayland session (headless weston + XWayland).
 
 1. With XWayland: ``EXECUTABLE --self-test`` must open and close the real
-   interface and report a Wayland session.
-2. Without XWayland (no DISPLAY): StepWatch must exit with code 2 and an
-   explanation naming XWayland, instead of a Tk traceback.
+   interface (Qt through XWayland) and report a Wayland session.
+2. Without XWayland (no DISPLAY): the same self-test must pass with the
+   native Qt Wayland backend.
 
 Requires weston (9 or later) and XWayland. Used by the CI on Arch Linux.
 """
@@ -61,24 +61,25 @@ def main() -> int:
             result = subprocess.run([arguments.executable, "--self-test"], env=with_xwayland,
                                     capture_output=True, text=True, timeout=120)
             print(result.stdout, end="")
-            if (result.returncode != 0 or "Interface Tk : OK" not in result.stdout
+            if (result.returncode != 0 or "Interface Qt : OK" not in result.stdout
                     or "session wayland" not in result.stdout):
-                raise RuntimeError(f"Auto-test sous Wayland en échec ({result.returncode}) :\n"
+                raise RuntimeError(f"Auto-test sous Wayland (XWayland) en échec ({result.returncode}) :\n"
                                    f"{result.stdout}{result.stderr}")
 
-            result = subprocess.run([arguments.executable], env=environment,
-                                    capture_output=True, text=True, timeout=60)
-            if result.returncode != 2 or "XWayland" not in result.stderr:
-                raise RuntimeError(f"Sans XWayland, code {result.returncode} inattendu :\n"
+            result = subprocess.run([arguments.executable, "--self-test"], env=environment,
+                                    capture_output=True, text=True, timeout=120)
+            print(result.stdout, end="")
+            if result.returncode != 0 or "Interface Qt : OK" not in result.stdout:
+                raise RuntimeError(f"Auto-test en Wayland natif en échec ({result.returncode}) :\n"
                                    f"{result.stdout}{result.stderr}")
-            print("Sans XWayland : message explicite, code 2.")
+            print("Sans XWayland : interface Qt en Wayland natif.")
         finally:
             weston.terminate()
             try:
                 weston.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 weston.kill()
-    print("Wayland (weston + XWayland) : OK.")
+    print("Wayland (weston, avec et sans XWayland) : OK.")
     return 0
 
 

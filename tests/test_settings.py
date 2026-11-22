@@ -2,14 +2,11 @@
 
 import json
 import os
-import sys
 import tempfile
-import tkinter as tk
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from stepwatch.models import CaptureTarget, Rect
 from stepwatch.settings import RECENT_LIMIT, Preferences, default_path
 
 
@@ -66,26 +63,16 @@ class PreferencesTests(unittest.TestCase):
         self.assertFalse(preferences.save())
 
 
-@unittest.skipUnless(
-    os.environ.get("STEPWATCH_GUI_TESTS") == "1"
-    and (sys.platform == "win32" or os.environ.get("DISPLAY")),
-    "Interface : activer STEPWATCH_GUI_TESTS=1 avec un bureau Windows ou DISPLAY.",
-)
 class InterfacePreferencesTests(unittest.TestCase):
     def make_app(self, preferences):
-        from stepwatch.ui import StepWatchApp
-        root = tk.Tk()
-        backend = Mock()
-        backend.list_windows.return_value = [CaptureTarget("window", "Client", hwnd=1)]
-        backend.list_monitors.return_value = [CaptureTarget("monitor", "Écran", rect=Rect(0, 0, 800, 600))]
-        with patch("stepwatch.ui.capture_backend_factory", return_value=Mock(return_value=backend)):
-            app = StepWatchApp(root, preferences=preferences)
-        root.update()
-        return app
+        import qt_helpers
+
+        return qt_helpers.make_app(preferences=preferences)
 
     def close(self, app):
-        app.shutdown(timeout=5)
-        app.dispose()
+        import qt_helpers
+
+        qt_helpers.close_app(app)
 
     def test_settings_are_restored_on_next_launch(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -97,20 +84,24 @@ class InterfacePreferencesTests(unittest.TestCase):
                 app.mode.set("Clics locaux uniquement")
                 app.sensitivity.set("3,5")
                 app.compact.set(False)
-                app.masks_text.insert("1.0", "1,2,3,4")
+                app.masks_text.setPlainText("1,2,3,4")
                 app._toggle_advanced()
+                app.root.resize(790, 740)  # Écran hors écran de 800 × 800.
                 app._store_preferences()
             finally:
                 self.close(app)
+            self.assertRegex(Preferences(path).values["geometry"], r"^790x740\+-?\d+\+-?\d+$")
             app = self.make_app(Preferences(path))
             try:
                 self.assertEqual(app.output.get(), temporary)
                 self.assertEqual(app.source.get(), "Moniteur")
+                self.assertEqual(app.source_combo.currentText(), "Moniteur")
                 self.assertEqual(app.mode.get(), "Clics locaux uniquement")
                 self.assertEqual(app.sensitivity.get(), "3,5")
                 self.assertFalse(app.compact.get())
-                self.assertEqual(app.masks_text.get("1.0", "end-1c"), "1,2,3,4")
+                self.assertEqual(app.masks_text.toPlainText(), "1,2,3,4")
                 self.assertTrue(app._advanced_open.get())
+                self.assertEqual((app.root.width(), app.root.height()), (790, 740))
             finally:
                 self.close(app)
 

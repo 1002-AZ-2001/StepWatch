@@ -29,8 +29,9 @@ if __package__ in (None, ""):
 from scripts.build_deb import ROOT, PackagingError, minimum_glibc, project_version, stage_files
 
 #: Arch Linux names of the libraries in the Debian control file.
-DEPENDENCIES = ("libx11", "libxext", "libxrender", "libxss", "libxft", "libxcb",
-                "fontconfig", "freetype2", "expat", "zlib", "ttf-font")
+DEPENDENCIES = ("libx11", "libxcb", "xcb-util", "xcb-util-cursor", "xcb-util-wm", "xcb-util-image",
+                "xcb-util-keysyms", "xcb-util-renderutil", "libxkbcommon", "libxkbcommon-x11", "wayland",
+                "libglvnd", "dbus", "glib2", "fontconfig", "freetype2", "expat", "zlib", "ttf-font")
 
 
 def _root_owned(info: tarfile.TarInfo) -> tarfile.TarInfo:
@@ -50,7 +51,7 @@ arch=('x86_64')
 url="https://github.com/1002-AZ-2001/StepWatch"
 license=('AGPL-3.0-only')
 depends=({depends})
-optdepends=('xorg-xwayland: affichage dans une session Wayland'
+optdepends=('xorg-xwayland: barre flottante au premier plan sous Wayland'
             'python-gobject: accès au portail et à GStreamer sous Wayland'
             'gst-plugins-base: traitement des images du flux Wayland'
             'gst-plugin-pipewire: réception du flux Wayland'

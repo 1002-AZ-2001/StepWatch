@@ -128,7 +128,10 @@ jobs:
       - name: Installer les outils système
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q xvfb x11-utils dpkg-dev python3-gi \
+          # Bibliothèques de Qt (xcb, Wayland, OpenGL) pour l'auto-test et la capture d'écran.
+          sudo apt-get install -y -q xvfb x11-utils dpkg-dev python3-gi binutils \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
             gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
             gstreamer1.0-plugins-base gstreamer1.0-pipewire
 
@@ -146,7 +149,7 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 >/dev/null 2>&1 &
           for _ in $(seq 1 50); do xdpyinfo -display :99 >/dev/null 2>&1 && break; sleep 0.1; done
 
-      - name: Tests (interface Tk comprise)
+      - name: Tests (interface Qt comprise)
         run: |
           set -o pipefail
           .venv/bin/python -X faulthandler -u -m unittest discover -s tests -v 2>&1 | tee tests-linux.log
@@ -169,10 +172,10 @@ jobs:
           test -r /opt/stepwatch/_internal/stepwatch/_wayland_portal.py
           .venv/bin/python scripts/smoke_linux_bundle.py /opt/stepwatch/StepWatch
           stepwatch --self-test | tee selftest.log
-          grep -q "Interface Tk : OK" selftest.log
+          grep -q "Interface Qt : OK" selftest.log
           grep -q "Capture X11 : OK" selftest.log
 
-      - name: Ubuntu 22.04 (Wayland, weston + XWayland) — auto-test
+      - name: Ubuntu 22.04 (Wayland, weston avec et sans XWayland) — auto-test
         run: |
           sudo apt-get install -y -q weston xwayland
           .venv/bin/python scripts/smoke_wayland.py /usr/bin/stepwatch
@@ -196,7 +199,7 @@ jobs:
             Xvfb :42 -screen 0 1280x800x24 >/dev/null 2>&1 &
             sleep 2
             DISPLAY=:42 stepwatch --self-test | tee /tmp/selftest.log
-            grep -q "Interface Tk : OK" /tmp/selftest.log
+            grep -q "Interface Qt : OK" /tmp/selftest.log
             grep -q "Capture X11 : OK" /tmp/selftest.log
             apt-get remove -y -q stepwatch
             test ! -e /opt/stepwatch
@@ -211,7 +214,7 @@ jobs:
             Xvfb :42 -screen 0 1280x800x24 >/dev/null 2>&1 &
             sleep 2
             DISPLAY=:42 stepwatch --self-test | tee /tmp/selftest.log
-            grep -q "Interface Tk : OK" /tmp/selftest.log
+            grep -q "Interface Qt : OK" /tmp/selftest.log
             grep -q "Capture X11 : OK" /tmp/selftest.log
             python /scripts/smoke_wayland.py /usr/bin/stepwatch
             pacman -R --noconfirm stepwatch
