@@ -130,9 +130,20 @@ If an antivirus or a sync tool briefly locks a file, the write is retried. If th
 
 ## Menus and settings
 
-The menu bar offers **Fichier** (File: open, recent guides, ShareX import, exports, **Paramètres…** settings, quit), **Enregistrement** (Recording: start Ctrl+R, pause, note, stop, refresh targets F5), **Guide** (undo, title, move, black out, remove), **Affichage** (View: tabs Ctrl+1/2/3, advanced settings) and **Aide** (Help: shortcuts F1, online documentation, report a problem, log and settings folders, installation check, about). Unavailable entries are greyed out.
+The menu bar offers **Fichier** (File: open, recent guides, ShareX import, exports, **Paramètres…** settings, quit), **Enregistrement** (Recording: start Ctrl+R, pause, note, stop, refresh targets F5), **Guide** (undo, title, move, black out, remove), **Affichage** (View: tabs Ctrl+1/2/3, advanced settings) and **Aide** (Help: shortcuts F1, online documentation, report a problem, log and settings folders, installation check, **check for updates**, about). Unavailable entries are greyed out.
 
 **Paramètres…** (Ctrl+,) sets: the suggested guide name with `{date}` and `{heure}` (time) placeholders, the guides folder, the floating bar and its position (bottom or top), Windows global shortcuts, a sound on each step, opening the Guide tab after stopping, an automatic standalone report after stopping, delete confirmation, keeping or erasing the screenshot of a removed step (erasing cannot be undone and is always confirmed), text size (next launch) and advanced settings shown at startup. **Réinitialiser** (Reset) restores the defaults and keeps recent guides.
+
+## Automatic updates
+
+At startup, at most once a day, StepWatch asks GitHub for the latest published version. If it is newer, a window shows its notes with **Installer et redémarrer** (install and restart), **Plus tard** (later), **Ignorer cette version** (skip) and **Voir sur GitHub**. **Aide › Rechercher des mises à jour…** checks on demand. A version found while recording is offered after the stop.
+
+- Windows `.exe`: the file is replaced in place; the old copy is deleted at the next start.
+- Windows portable folder: files are copied by a PowerShell script once StepWatch has closed, then it restarts.
+- Debian/Ubuntu and Arch Linux packages: `pkexec apt-get install` or `pkexec pacman -U` (administrator password).
+- From source: the window opens the release page.
+
+The download must match two SHA-256 checksums before anything is installed: GitHub's digest of the asset and the release's `SHA256SUMS` file. They detect corrupted or altered downloads, not a release published by someone who took over the repository: files are not signed yet. This is StepWatch's only network access, a request to GitHub's public releases API (GitHub sees the workstation's IP address); no screenshot, log or identifier is sent. Turn it off in **Paramètres › Général**.
 
 ## Keyboard shortcuts, preferences
 

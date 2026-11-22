@@ -47,6 +47,10 @@ DEFAULTS: dict[str, Any] = {
     "keep_retired": True,
     "auto_standalone": False,
     "font_scale": 100,
+    # Mises à jour (Paramètres › Général, menu Aide).
+    "check_updates": True,
+    "last_update_check": "",
+    "skipped_version": "",
 }
 
 #: Allowed values of the preferences that are a choice.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 MUTEX_NAME = "Local\\StepWatch-instance-unique"
@@ -28,8 +29,19 @@ class InstanceLock:
         self.path = Path(path) if path is not None else None
         self._handle = None
 
-    def acquire(self) -> bool:
-        """True when this process is the only StepWatch; never raises."""
+    def acquire(self, wait: float = 0) -> bool:
+        """True when this process is the only StepWatch; never raises.
+
+        ``wait`` > 0 retries while another instance closes (restart after an update).
+        """
+        deadline = time.monotonic() + max(0, wait)
+        while not self._try_acquire():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+        return True
+
+    def _try_acquire(self) -> bool:
         try:
             if self.platform == "win32":
                 return self._acquire_windows()

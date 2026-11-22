@@ -20,6 +20,8 @@ StepWatch est une application Python 3.11+ avec une interface Tkinter/ttk en fra
 | `floating.py` | Barre flottante pendant l'enregistrement : état, nombre d'étapes, pause, note, arrêt, retour à la fenêtre. |
 | `theme.py` | Palette, styles ttk (thème « clam ») et icône StepWatch dessinée avec Pillow. |
 | `settings.py` | Préférences locales (`settings.json`) : lues au lancement, écrites au démarrage d'un enregistrement et à la fermeture ; un fichier absent ou invalide donne les valeurs par défaut. |
+| `updater.py` | Mises à jour : dernière version publiée sur GitHub, téléchargement vérifié par SHA-256, remplacement de l'exécutable, script de la version portable, `pkexec` pour les paquets Linux. |
+| `update_dialog.py` | Fenêtre « Mise à jour disponible » : notes de version, progression, installation et redémarrage. |
 | `settings_dialog.py` | Fenêtre Paramètres : onglets Général, Enregistrement, Guide et rapports, Interface ; travaille sur une copie des préférences. |
 | `library.py` | Guides récents : dossiers déjà ouverts et interventions du dossier des guides, les plus récents d'abord. |
 | `hotkeys.py` | Raccourcis d'enregistrement Windows (`RegisterHotKey`) sur un thread doté de sa propre boucle de messages ; les actions passent à l'interface par une file. |
@@ -39,7 +41,7 @@ Le moteur attend la fin de l'écriture en cours avant d'ajouter une note ou de f
 
 ## Garanties
 
-- **Local uniquement** : aucune capture, aucun journal ni aucune télémétrie n'est envoyé sur le réseau.
+- **Local uniquement** : aucune capture, aucun journal ni aucune télémétrie n'est envoyé sur le réseau. Le seul accès réseau est la recherche de mises à jour sur l'API publique de GitHub, désactivable dans les Paramètres.
 - **Aucune frappe clavier** n'est enregistrée. Les seuls textes saisis conservés sont le nom de l'intervention et les notes.
 - **Masques avant écriture** : les zones masquées sont noircies avant la comparaison, l'aperçu et l'écriture, puis de nouveau après le marqueur de clic.
 - **Rien au lancement** : aucun hook ni aucune capture avant **● Enregistrer**.
