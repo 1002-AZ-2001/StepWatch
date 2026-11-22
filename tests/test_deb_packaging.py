@@ -83,6 +83,7 @@ class DebianPackagingTests(unittest.TestCase):
         for dependency in ("libxcb-cursor0", "libxkbcommon-x11-0", "libwayland-client0", "libegl1"):
             self.assertIn(dependency, packaging.DEPENDENCIES)
 
+    @unittest.skipUnless(os.name == "posix", "Paquet Linux : liens symboliques relatifs POSIX")
     def test_unused_qt_plugins_translations_and_orphan_libraries_are_pruned(self):
         internal = self.bundle / "_internal"
         qt = internal / "PySide6" / "Qt"
