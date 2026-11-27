@@ -191,4 +191,4 @@ Thanks to DokT for the first English translation.
 
 License: [GNU AGPL v3](LICENSE). The interface uses [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/), under the LGPL v3: packages ship its libraries unmodified.
 
-References: [Steps Recorder deprecation](https://www.neowin.net/news/microsoft-deprecates-even-more-windows-features-steps-recorder-gets-the-axe/), [low-level mouse hooks](https://learn.microsoft.com/windows/win32/winmsg/lowlevelmouseproc), [mss](https://python-mss.readthedocs.io/), [pynput](https://pynput.readthedocs.io/), [Pillow](https://pillow.readthedocs.io/).
+References: [Steps Recorder deprecation](https://www.neowin.net/news/microsoft-deprecates-even-more-windows-features-steps-recorder-gets-the-axe/), [mss](https://python-mss.readthedocs.io/), [Raw Input](https://learn.microsoft.com/windows/win32/inputdev/raw-input), [Pillow](https://pillow.readthedocs.io/).
