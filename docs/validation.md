@@ -8,7 +8,7 @@ Le workflow [Tests et paquets Windows / Debian](https://github.com/1002-AZ-2001/
 
 | Job | Vérifications |
 | --- | --- |
-| Windows x64 | Installation par `install.ps1` ; suite complète, interface Qt comprise (hors écran) ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; `StepWatch.exe --self-test` ; sommes SHA-256. |
+| Windows x64 | Installation par `install.ps1` ; suite complète, interface Qt comprise (hors écran) ; construction PyInstaller ; essai natif (`smoke_windows.py`) : énumération des fenêtres, capture MSS, déplacement d'une fenêtre, état des boutons de la souris, clic réel (SendInput) enregistré par l'écoute Raw Input ; ouverture et fermeture de l'exécutable unique et de l'exécutable portable ; `StepWatch.exe --self-test` ; sommes SHA-256. |
 | Linux amd64 (Ubuntu 22.04) | Vérifications `ruff` et `pip check`, tests de l'interface Qt (hors écran) et capture X11 sous Xvfb. Construction et installation du `.deb`, contrôle de la présence du script ScreenCast, lancement et capture X11 depuis l'exécutable installé. Auto-test de l'interface sous Weston, avec XWayland puis en Wayland natif. Sommes SHA-256. |
 | Debian 12 (conteneur) | Installation du `.deb` par `apt`, auto-test avec capture X11, désinstallation complète. |
 | Arch Linux (conteneurs) | Paquet construit par `makepkg` non root ; installation par `pacman`, auto-test X11 et Wayland (weston, avec et sans `xorg-xwayland`), désinstallation complète. |

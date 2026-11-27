@@ -240,4 +240,4 @@ Les images du README montrent une session et un rapport de démonstration avec d
 
 Licence : [GNU AGPL v3](LICENSE). L'interface utilise [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/), sous licence LGPL v3 : les paquets embarquent ses bibliothèques sans les modifier.
 
-Références : [Enregistreur d'actions déprécié](https://www.neowin.net/news/microsoft-deprecates-even-more-windows-features-steps-recorder-gets-the-axe/), [hooks souris bas niveau](https://learn.microsoft.com/windows/win32/winmsg/lowlevelmouseproc), [mss](https://python-mss.readthedocs.io/), [pynput](https://pynput.readthedocs.io/), [Pillow](https://pillow.readthedocs.io/).
+Références : [Enregistreur d'actions déprécié](https://www.neowin.net/news/microsoft-deprecates-even-more-windows-features-steps-recorder-gets-the-axe/), [mss](https://python-mss.readthedocs.io/), [Raw Input](https://learn.microsoft.com/windows/win32/inputdev/raw-input), [Pillow](https://pillow.readthedocs.io/).

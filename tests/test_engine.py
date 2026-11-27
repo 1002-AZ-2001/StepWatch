@@ -912,7 +912,7 @@ class HookWatchdogTests(unittest.TestCase):
         self.assertEqual(self.recorder.hook_restarts, 1)
         errors = [event for event in self.observed_events if event["type"] == "error"]
         self.assertEqual(len(errors), 1)
-        self.assertIn("réinstallé", errors[0]["message"])
+        self.assertIn("relancée", errors[0]["message"])
         # The new hook is used for the following clicks.
         new.click()
         self.wait_for(lambda: len(self.saved_events()) == 1)

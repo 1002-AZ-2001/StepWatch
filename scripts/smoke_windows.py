@@ -5,8 +5,9 @@ Run from a checkout after installing ``requirements-dev.txt``:
     python scripts/smoke_windows.py --executable dist/StepWatch/StepWatch.exe
 
 The default check opens its own Tk target, captures only that target into a
-temporary directory, and starts/stops a real pynput mouse hook. It does not
-generate mouse input or keyboard input. --executable runs only the packaged
+temporary directory, and starts/stops the real Raw Input mouse listener. It
+sends one left click (SendInput) inside its own target window to check that
+Raw Input reports it as a step; it never generates keyboard input. --executable runs only the packaged
 UI startup/close check; it never starts recording or repeats the native check.
 An interactive Windows desktop is required. Failures are never silently skipped.
 """
@@ -22,7 +23,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 
@@ -52,10 +52,39 @@ def has_color(image, expected: tuple[int, int, int]) -> bool:
     return max(abs(left - right) for left, right in zip(actual, expected)) <= 3
 
 
+class _MouseInput(ctypes.Structure):
+    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _Input(ctypes.Structure):
+    class _Union(ctypes.Union):
+        _fields_ = [("mi", _MouseInput), ("padding", ctypes.c_byte * 32)]
+
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wintypes.DWORD), ("u", _Union)]
+
+
+def click_left(x: int, y: int) -> None:
+    """Move the cursor to (x, y) and send one left click, like a user would."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int]
+    user32.SendInput.restype = wintypes.UINT
+    require(bool(user32.SetCursorPos(x, y)), "SetCursorPos failed")
+    time.sleep(.1)
+    events = (_Input * 2)()
+    for event, flag in zip(events, (0x0002, 0x0004)):  # MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP
+        event.type = 0  # INPUT_MOUSE
+        event.mi.dwFlags = flag
+    sent = user32.SendInput(2, events, ctypes.sizeof(_Input))
+    require(sent == 2, f"SendInput sent {sent} of 2 events (error {ctypes.get_last_error()})")
+
+
 def native_smoke() -> None:
     import tkinter as tk
     from PIL import Image
-    from pynput import mouse
+    from stepwatch.rawinput import RawMouseListener
 
     from stepwatch.engine import Recorder
     from stepwatch.models import CaptureConfig, Rect
@@ -137,7 +166,7 @@ def native_smoke() -> None:
                    "The restored target was not visibly repainted")
 
         def listener_factory(callback):
-            listener = mouse.Listener(on_click=callback)
+            listener = RawMouseListener(callback)
             listeners.append(listener)
             return listener
 
@@ -153,27 +182,22 @@ def native_smoke() -> None:
             pump_until(root, lambda: bool(store.steps),
                        "The native Recorder did not save an initial capture")
             require(len(listeners) == 1 and listeners[0].is_alive(),
-                    "The native pynput mouse hook did not start")
-            # Listener.wait() is the public readiness API but has no timeout.
-            # Keep its wait bounded for CI, and leave any failed waiter daemon
-            # so that a failed native hook cannot hold up diagnostic shutdown.
-            ready = threading.Event()
+                    "The Raw Input mouse listener did not start")
+            pump_until(root, lambda: listeners[0].wait(0), "The Raw Input listener never became ready", timeout=5)
+            require(listeners[0].error is None, f"Raw Input registration failed: {listeners[0].error}")
 
-            def wait_for_hook():
-                listeners[0].wait()
-                ready.set()
-
-            waiter = threading.Thread(target=wait_for_hook, name="smoke-hook-ready", daemon=True)
-            waiter.start()
-            pump_until(root, ready.is_set, "The native mouse hook never became ready", timeout=5)
-            waiter.join(timeout=1)
+            # One real left click inside the target (injected input reaches Raw Input).
+            rect = backend.resolve(target)
+            click_left(rect.left + rect.width // 2, rect.top + rect.height // 2)
+            pump_until(root, lambda: any(step["trigger"] == "local_click" for step in store.steps),
+                       "A real left click was not reported by Raw Input", timeout=10)
 
             root.configure(bg="#bc783a")
             pump_until(root, lambda: any(step["trigger"] == "visual_change" for step in store.steps),
                        "A real window color change was not recorded")
             require(recorder.stop(timeout=10), "The native Recorder did not stop")
             require(recorder.state == "stopped", f"Recorder ended in {recorder.state!r}")
-            require(not listeners[0].is_alive(), "The native mouse hook remained alive after stop")
+            require(not listeners[0].is_alive(), "The Raw Input listener remained alive after stop")
             require(not recorder._thread.is_alive(), "The capture thread remained alive after stop")
             metadata = json.loads((store.directory / "steps.json").read_text(encoding="utf-8"))
             require(metadata["steps"][0]["trigger"] == "initial", "Initial step is missing")
@@ -209,7 +233,7 @@ def native_smoke() -> None:
             raise RuntimeError("A closed window was incorrectly available for capture")
         print(json.dumps({"check": "native_windows", "status": "passed",
                           "monitors": len(monitors), "captures": count_before,
-                          "mouse_input_generated": False}), flush=True)
+                          "mouse_input_generated": True}), flush=True)
     finally:
         if recorder is not None:
             require(recorder.stop(timeout=10), "Native capture thread could not be released")

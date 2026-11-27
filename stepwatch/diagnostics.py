@@ -53,7 +53,7 @@ def setup(directory: Path | None = None) -> Path | None:
     _state.update(handler=handler, root_level=root.level,
                   app_level=logging.getLogger("stepwatch").level,
                   excepthook=previous_excepthook, thread_hook=previous_thread_hook)
-    # Libraries (pynput reports hook callback errors) at WARNING, StepWatch at INFO.
+    # Libraries at WARNING, StepWatch at INFO.
     root.setLevel(logging.WARNING)
     logging.getLogger("stepwatch").setLevel(logging.INFO)
 

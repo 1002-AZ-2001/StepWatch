@@ -43,10 +43,11 @@ PORTAL_POLL_INTERVAL = 1.0
 #: re-checks it and reports the error through the usual path.
 _UNRESOLVED = object()
 
-#: Windows 7+ silently removes a low-level hook whose callback times out
-#: (LowLevelHooksTimeout), and the listener thread stays alive. The watchdog
-#: polls the physical button state: a press the hook never reports within
-#: this delay means the hook is gone, and it is reinstalled.
+#: Watchdog of the click listener (Raw Input on Windows since 1.2, XRecord on
+#: X11). It polls the physical button state: a press the listener never
+#: reports within this delay means it stopped receiving input (registration
+#: lost, earlier low-level hooks removed after LowLevelHooksTimeout), and it is
+#: started again.
 HOOK_SILENCE_GRACE = 1.0
 #: Back-off ceiling when presses stay unreported after a reinstallation (for
 #: instance a higher-integrity window under the cursor, which also filters
@@ -91,8 +92,9 @@ def mouse_listener(callback):
     if sys.platform.startswith("linux"):
         from stepwatch.x11 import X11ClickListener
         return X11ClickListener(callback)
-    from pynput.mouse import Listener
-    return Listener(on_click=callback)
+    # Windows : Raw Input, sans hook système ni code d'écoute du clavier.
+    from stepwatch.rawinput import RawMouseListener
+    return RawMouseListener(callback)
 
 
 class Recorder:
@@ -294,8 +296,8 @@ class Recorder:
         replacement = self._listener_factory(self._on_click)
         replacement.start()
         self.hook_restarts += 1
-        message = ("Le hook souris ne recevait plus les clics (retiré par Windows ?) ; "
-                   "il a été réinstallé. Des clics ont pu manquer : vérifiez les dernières étapes.")
+        message = ("L’écoute de la souris ne recevait plus les clics ; elle a été relancée. "
+                   "Des clics ont pu manquer : vérifiez les dernières étapes.")
         LOGGER.warning("Hook souris réinstallé (%d)", self.hook_restarts)
         self._emit("error" if self.hook_restarts == 1 else "log", message)
         return replacement

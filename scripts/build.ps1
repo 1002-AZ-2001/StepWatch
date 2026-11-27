@@ -30,7 +30,7 @@ try {
     $Common = @("--noconfirm", "--clean", "--windowed", "--noupx", "--paths", $ProjectRoot,
                 "--manifest", (Join-Path $PSScriptRoot "StepWatch.manifest"),
                 "--version-file", (Join-Path $Resources "version.txt"), "--icon", (Join-Path $Resources "stepwatch.ico"),
-                "--collect-submodules", "pynput", "--add-data", "stepwatch\assets;stepwatch\assets",
+                "--add-data", "stepwatch\assets;stepwatch\assets",
                 "--exclude-module", "tkinter", "--exclude-module", "_tkinter",
                 "--exclude-module", "PySide6.QtNetwork", "--exclude-module", "PySide6.QtDBus")
     Invoke-Checked -Arguments (@("-m", "PyInstaller") + $Common + @("--name", "StepWatch", "stepwatch\__main__.py"))

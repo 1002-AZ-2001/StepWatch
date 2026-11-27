@@ -4,6 +4,18 @@
 
 Rien pour l'instant.
 
+## 1.2.0 — 2026-11-27
+
+Moins de raisons pour les antivirus de se méfier de StepWatch.
+
+- **Clics lus par Raw Input sous Windows**, l'API documentée par Microsoft pour lire un périphérique, à la place d'un hook système bas niveau (`SetWindowsHookEx`, bibliothèque pynput). L'exécutable ne contient plus aucun code d'écoute du clavier, motif typique des logiciels espions. StepWatch ne s'abonne qu'à la souris. Autre bénéfice : Windows ne peut plus retirer silencieusement l'écoute quand une application ralentit le système.
+- **CI Windows** : un vrai clic (SendInput) dans une fenêtre de test doit devenir une étape, avec la nouvelle écoute.
+- **Guide [Antivirus et SmartScreen](docs/antivirus.md)** :
+  - différence entre programme inconnu (SmartScreen, classification WatchGuard EPDR) et détection nommée ;
+  - marche à suivre dans la console WatchGuard EPDR (déblocage, exclusion par signature) ;
+  - texte prêt à copier pour déclarer un faux positif à Microsoft ou à WatchGuard.
+- Dépendance retirée : pynput.
+
 ## 1.1.0 — 2026-11-27
 
 Synchronisation vers un serveur, installateur Windows, moins de faux positifs antivirus et corrections.
