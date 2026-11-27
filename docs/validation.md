@@ -69,6 +69,8 @@ STEPWATCH_GSTREAMER_TESTS=1 .venv/bin/python -m unittest discover -s tests -p 't
 14. Parcourez chaque menu pendant et hors enregistrement (entrées grisées ou actives), puis modifiez chaque paramètre dans **Paramètres…**, relancez StepWatch et vérifiez qu'il est conservé.
 15. Avec la version précédente installée (exécutable, dossier portable, paquet Debian ou Arch), ouvrez **Aide › Rechercher des mises à jour…** : la nouvelle version doit être proposée, téléchargée, vérifiée, installée, puis StepWatch doit redémarrer dans la nouvelle version (**Aide › À propos**). Sous Windows, vérifiez que le fichier `.old` a disparu après le redémarrage. `stepwatch --check-updates` affiche la dernière version publiée.
 16. Sous Windows, puis sous Linux X11 et Wayland (GNOME ou KDE), vérifiez le thème sombre, l'icône de la zone de notification (démarrer, pause, arrêt) et la netteté à 150 %. Sous Wayland sans XWayland, vérifiez que la fenêtre s'ouvre et que la barre flottante reste utilisable.
+17. Synchronisez un guide vers Nextcloud (mot de passe d'application), un partage réseau et un serveur SFTP : contenu identique sur le serveur, reprise après coupure du réseau, captures d'une étape supprimée retirées, mot de passe absent de `settings.json`.
+18. Sous Windows, installez avec `StepWatch-VERSION-windows-x64-setup.exe`, lancez depuis le menu Démarrer, puis désinstallez depuis les Paramètres de Windows ; vérifiez les propriétés de l'exécutable (version, éditeur) et, si la signature est active, l'onglet Signatures numériques.
 
 ## Validation sur un bureau Linux
 

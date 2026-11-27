@@ -16,6 +16,9 @@ Installation selon la forme de StepWatch :
 - ``exe`` (Windows, fichier unique) : l'exécutable en cours est renommé en
   ``.old`` (Windows autorise le renommage d'un programme lancé, pas son
   remplacement), le nouveau prend sa place, puis StepWatch redémarre ;
+- ``setup`` (Windows, installé par l'installateur) : un script PowerShell attend
+  la fermeture de StepWatch, lance le nouvel installateur en mode silencieux
+  dans le même dossier, puis relance l'application ;
 - ``portable`` (Windows, dossier du ZIP) : l'archive est extraite et vérifiée,
   puis un script PowerShell attend la fermeture de StepWatch, copie les
   fichiers et relance l'application ;
@@ -62,14 +65,16 @@ CA_FILES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem",
             "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem")
 ASSET_PATTERNS = {
     "exe": re.compile(r"StepWatch-[0-9.]+-windows-x64\.exe"),
+    "setup": re.compile(r"StepWatch-[0-9.]+-windows-x64-setup\.exe"),
     "portable": re.compile(r"StepWatch-[0-9.]+-windows-x64-portable\.zip"),
     "deb": re.compile(r"stepwatch_[0-9.]+_amd64\.deb"),
     "arch": re.compile(r"stepwatch-[0-9.]+-[0-9]+-x86_64\.pkg\.tar\.zst"),
 }
-SUMS_FILES = {"exe": "SHA256SUMS-windows.txt", "portable": "SHA256SUMS-windows.txt",
+SUMS_FILES = {"exe": "SHA256SUMS-windows.txt", "setup": "SHA256SUMS-windows.txt", "portable": "SHA256SUMS-windows.txt",
               "deb": "SHA256SUMS-linux.txt", "arch": "SHA256SUMS-linux.txt"}
 KIND_LABELS = {
     "exe": "exécutable Windows",
+    "setup": "installation Windows",
     "portable": "dossier portable Windows",
     "deb": "paquet Debian / Ubuntu",
     "arch": "paquet Arch Linux",
@@ -103,7 +108,7 @@ class Release:
 
 @dataclass(frozen=True)
 class Installation:
-    kind: str  # exe, portable, deb, arch ou source
+    kind: str  # exe, setup, portable, deb, arch ou source
     path: Path | None = None  # Exécutable (exe) ou dossier (portable).
 
     @property
@@ -210,8 +215,12 @@ def detect_installation(*, frozen: bool | None = None, executable: str | None = 
             inside = bundle.resolve().is_relative_to(exe.parent.resolve())
         except OSError:
             inside = True
-        # Fichier unique : PyInstaller s'extrait dans un dossier temporaire.
-        return Installation("portable", exe.parent) if inside else Installation("exe", exe)
+        if not inside:
+            # Fichier unique : PyInstaller s'extrait dans un dossier temporaire.
+            return Installation("exe", exe)
+        if (exe.parent / "unins000.exe").exists():
+            return Installation("setup", exe.parent)  # Installé par l'installateur Inno Setup.
+        return Installation("portable", exe.parent)
     if platform.startswith("linux"):
         try:
             real = exe.resolve() if os.name == "posix" else exe
@@ -387,6 +396,33 @@ def start_portable_helper(source: Path, target: Path, *, wait_for: int, restart:
     return popen(command, creationflags=flags, close_fds=True, env=_clean_environment())
 
 
+SETUP_HELPER = r"""param([int]$WaitFor, [string]$Setup, [string]$Target, [string]$Restart)
+$ErrorActionPreference = 'Stop'
+try { Wait-Process -Id $WaitFor -Timeout 120 -ErrorAction SilentlyContinue } catch {}
+Start-Sleep -Milliseconds 500
+$process = Start-Process -FilePath $Setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$Target`"" -Wait -PassThru
+if ($Restart) {
+    $env:PYINSTALLER_RESET_ENVIRONMENT = '1'
+    Start-Process -FilePath (Join-Path $Target 'StepWatch.exe') -ArgumentList '--after-update'
+}
+Remove-Item -LiteralPath (Split-Path -Parent $Setup) -Recurse -Force -ErrorAction SilentlyContinue
+exit $process.ExitCode
+"""
+
+
+def start_setup_helper(setup: Path, target: Path, *, wait_for: int, restart: bool = True,
+                       popen=subprocess.Popen) -> subprocess.Popen:
+    """Lance l'installateur en mode silencieux après la fin du processus ``wait_for``."""
+    _check_writable(target)
+    script = setup.parent / "installer-mise-a-jour.ps1"
+    script.write_text(SETUP_HELPER, encoding="utf-8-sig")
+    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+               "-WindowStyle", "Hidden", "-File", str(script), "-WaitFor", str(wait_for),
+               "-Setup", str(setup), "-Target", str(target), "-Restart", "1" if restart else ""]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    return popen(command, creationflags=flags, close_fds=True, env=_clean_environment())
+
+
 def package_command(installation: Installation, package: Path) -> list[str]:
     if installation.kind == "deb":
         return ["pkexec", "apt-get", "install", "-y", str(package)]
@@ -438,6 +474,9 @@ def apply(installation: Installation, downloaded: Path, *, run=subprocess.run,
     if installation.kind == "exe":
         executable = replace_executable(installation.path, downloaded)
         return [str(executable), AFTER_UPDATE]
+    if installation.kind == "setup":
+        start_setup_helper(downloaded, installation.path, wait_for=os.getpid() if pid is None else pid, popen=popen)
+        return None
     if installation.kind == "portable":
         staged = extract_portable(downloaded, downloaded.parent / "extrait")
         start_portable_helper(staged, installation.path, wait_for=os.getpid() if pid is None else pid,

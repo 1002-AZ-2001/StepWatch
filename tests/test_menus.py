@@ -331,6 +331,102 @@ class MenuAndSettingsTests(unittest.TestCase):
         dialog._apply()
         self.assertFalse(Preferences(self.prefs.path).values["check_updates"])
 
+    # ----- Synchronisation ----------------------------------------------------------
+
+    def test_settings_tab_configures_a_network_folder_and_stores_the_password(self):
+        nas = Path(self.temp.name) / "nas"
+        nas.mkdir()
+        self.app._open_settings()
+        dialog = self.app._settings_dialog
+        dialog.sync_combo.setCurrentText("Dossier réseau (NAS)")
+        self.assertEqual(dialog.sync_pages.currentIndex(), 2)
+        dialog.vars["sync_folder"].set(str(nas))
+        dialog.test_connection()
+        self.pump(lambda: "Connexion réussie" in dialog.test_status.text())
+        dialog._apply()
+        values = Preferences(self.prefs.path).values
+        self.assertEqual((values["sync_kind"], values["sync_folder"]), ("folder", str(nas)))
+        self.assertNotIn("sync_password", values)
+        self.app._open_settings()
+        dialog = self.app._settings_dialog
+        dialog.sync_combo.setCurrentText("Nextcloud ou WebDAV")
+        dialog.vars["sync_url"].set("https://cloud.exemple.fr/remote.php/dav/files/tech/StepWatch")
+        dialog.vars["sync_user"].set("tech")
+        dialog.webdav_password.setText("mot-de-passe-application")
+        with patch("stepwatch.ui.sync.set_password", return_value=True) as stored:
+            dialog._apply()
+        self.assertEqual(stored.call_args.args[1], "mot-de-passe-application")
+        self.assertNotIn("mot-de-passe-application", self.prefs.path.read_text(encoding="utf-8"))
+
+    def test_menu_sync_sends_the_open_guide_to_a_network_folder(self):
+        nas = Path(self.temp.name) / "nas"
+        nas.mkdir()
+        self.prefs.values.update(sync_kind="folder", sync_folder=str(nas))
+        self.app._use_session(self.directory)
+        self.app._refresh_menus()
+        self.assertTrue(self.enabled("Fichier", "Synchroniser le guide"))
+        self.app.action("Fichier", "Synchroniser le guide").trigger()
+        self.pump(lambda: "Synchronisation terminée" in log_text(self.app), timeout=10)
+        self.assertTrue((nas / self.directory.name / "rapport.html").is_file())
+        self.assertFalse(self.app._sync_running())
+
+    def test_sync_without_destination_explains_where_to_configure_it(self):
+        self.app._use_session(self.directory)
+        with patch("stepwatch.ui.messagebox.showinfo") as shown:
+            self.app.sync_guide()
+        self.assertIn("Paramètres › Synchronisation", shown.call_args.args[1])
+
+    def test_automatic_sync_after_the_recording_stops(self):
+        nas = Path(self.temp.name) / "nas"
+        nas.mkdir()
+        self.prefs.values.update(sync_kind="folder", sync_folder=str(nas), sync_auto=True,
+                                 open_guide_after_stop=False)
+        self.app._use_session(self.directory)
+        recorder = FakeRecorder()
+        self.app._recorder = recorder
+        self.app._compact_session = False
+        self.pump()
+        recorder.stop()
+        self.pump(lambda: (nas / self.directory.name / "steps.json").exists() and not self.app._sync_running(),
+                  timeout=15)
+
+    def test_webdav_password_is_asked_once_then_kept(self):
+        self.prefs.values.update(sync_kind="webdav", sync_url="https://cloud.exemple.fr/dav", sync_user="tech")
+        self.app._use_session(self.directory)
+        started = []
+        with patch("stepwatch.ui.sync.get_password", return_value=None), \
+                patch("stepwatch.ui.sync.set_password", return_value=True) as stored, \
+                patch("stepwatch.ui.simpledialog.askstring", return_value="secret") as asked, \
+                patch("stepwatch.ui.sync.SyncJob") as job:
+            job.return_value.start.side_effect = lambda: started.append(True) or job.return_value
+            self.app.sync_guide()
+        self.assertTrue(asked.call_args.kwargs["password"])
+        stored.assert_called_once()
+        self.assertEqual(job.call_args.args[2], "secret")
+        self.assertTrue(started)
+
+    def test_unknown_sftp_server_is_confirmed_before_trusting_it(self):
+        from stepwatch.sync import UnknownHostKey
+        error = UnknownHostKey("nas.local", 22, "ssh-ed25519", "SHA256:abc", key=None)
+        with patch("stepwatch.ui.messagebox.askyesno", return_value=False) as asked, \
+                patch("stepwatch.ui.sync.trust_host_key") as trust:
+            self.app._sync_event({"type": "sync_host_key", "directory": str(self.directory), "error": error})
+        self.assertIn("SHA256:abc", asked.call_args.args[1])
+        trust.assert_not_called()
+        with patch("stepwatch.ui.messagebox.askyesno", return_value=True), \
+                patch("stepwatch.ui.sync.trust_host_key") as trust, \
+                patch.object(self.app, "sync_guide") as again:
+            self.app._sync_event({"type": "sync_host_key", "directory": str(self.directory), "error": error})
+            self.pump(lambda: again.called)
+        trust.assert_called_once()
+
+    def test_sync_errors_are_shown_and_logged(self):
+        with patch("stepwatch.ui.messagebox.showerror") as error:
+            self.app._sync_event({"type": "sync_error", "directory": str(self.directory),
+                                  "message": "Serveur WebDAV injoignable"})
+        self.assertIn("reste complet", error.call_args.args[1])
+        self.assertIn("injoignable", log_text(self.app))
+
 
 if __name__ == "__main__":
     unittest.main()

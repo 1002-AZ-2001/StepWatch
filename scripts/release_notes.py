@@ -43,13 +43,14 @@ def release_notes(project: Path = ROOT) -> tuple[str, str]:
 
 | Fichier | Usage |
 | --- | --- |
+| `StepWatch-{version}-windows-x64-setup.exe` | Windows 10/11 x64, installateur recommandé (sans droits administrateur, désinstallation depuis les Paramètres de Windows). |
 | `StepWatch-{version}-windows-x64.exe` | Windows 10/11 x64, un seul fichier, sans installation de Python. |
 | `StepWatch-{version}-windows-x64-portable.zip` | Windows, dossier portable : extraire et conserver le dossier entier. |
 | `stepwatch_{version}_amd64.deb` | Debian 12+ et Ubuntu 22.04+ amd64. |
 | `stepwatch-{version}-1-x86_64.pkg.tar.zst` | Arch Linux x86_64. |
 | `SHA256SUMS-windows.txt`, `SHA256SUMS-linux.txt` | Sommes de contrôle des fichiers ci-dessus. |
 
-Pour vérifier un téléchargement, utilisez `sha256sum -c SHA256SUMS-linux.txt --ignore-missing` ou `Get-FileHash` sous PowerShell. Sous Linux, `stepwatch --self-test` vérifie l'installation. SmartScreen peut afficher un avertissement pour les exécutables Windows non signés.
+Pour vérifier un téléchargement, utilisez `sha256sum -c SHA256SUMS-linux.txt --ignore-missing` ou `Get-FileHash` sous PowerShell. Sous Linux, `stepwatch --self-test` vérifie l'installation. SmartScreen peut afficher un avertissement tant que les exécutables Windows ne sont pas signés ou n'ont pas encore de réputation : vérifiez d'abord la somme SHA-256.
 
 Installation et vérifications : [guide de distribution]({REPOSITORY}/blob/v{version}/docs/distribution.md) · [validation]({REPOSITORY}/blob/v{version}/docs/validation.md) · [journal complet]({REPOSITORY}/blob/v{version}/CHANGELOG.md).
 """

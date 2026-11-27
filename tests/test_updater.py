@@ -160,6 +160,31 @@ class InstallationTests(unittest.TestCase):
         elsewhere = dict(linux, executable=str(self.directory / "StepWatch"))
         self.assertEqual(updater.detect_installation(**elsewhere).kind, "source")
 
+    def test_installed_copy_is_detected_and_updated_by_the_setup(self):
+        folder = self.directory / "Programs" / "StepWatch"
+        folder.mkdir(parents=True)
+        (folder / "unins000.exe").write_bytes(b"uninstaller")
+        exe = folder / "StepWatch.exe"
+        installation = updater.detect_installation(frozen=True, platform="win32", executable=str(exe),
+                                                   bundle_dir=str(folder / "_internal"))
+        self.assertEqual((installation.kind, installation.path), ("setup", folder))
+        release = Release("9.0.0", "v9.0.0", "", "", (
+            Asset("StepWatch-9.0.0-windows-x64.exe", "https://x/a.exe", 1),
+            Asset("StepWatch-9.0.0-windows-x64-setup.exe", "https://x/s.exe", 1)))
+        self.assertEqual(updater.asset_for(release, installation).name, "StepWatch-9.0.0-windows-x64-setup.exe")
+        download = self.directory / "telechargement"
+        download.mkdir()
+        setup = download / "StepWatch-9.0.0-windows-x64-setup.exe"
+        setup.write_bytes(b"setup")
+        popen = Mock()
+        self.assertIsNone(updater.apply(installation, setup, popen=popen, pid=99))
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-Setup") + 1], str(setup))
+        self.assertEqual(Path(command[command.index("-Target") + 1]), folder)
+        self.assertEqual(command[command.index("-WaitFor") + 1], "99")
+        script = (download / "installer-mise-a-jour.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("/VERYSILENT", script)
+
     def test_executable_is_swapped_and_old_copy_cleaned(self):
         exe = self.directory / "StepWatch-0.9.0-windows-x64.exe"
         exe.write_bytes(b"ancienne")

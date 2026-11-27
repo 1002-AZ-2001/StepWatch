@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFrame, QGrid
                                QLineEdit, QMainWindow, QMenu, QPlainTextEdit, QPushButton, QScrollArea,
                                QSizePolicy, QSystemTrayIcon, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
-from . import updater
+from . import sync, updater
 from .engine import Recorder
 from .floating import FloatingBar, StatusDot
 from .hotkeys import LABELS as HOTKEY_LABELS, GlobalHotkeys
@@ -46,7 +46,9 @@ ISSUES_URL = "https://github.com/1002-AZ-2001/StepWatch/issues"
 #: Préférences modifiables dans la fenêtre Paramètres.
 SETTINGS_KEYS = ("name_template", "output", "compact", "bar_position", "global_hotkeys", "sound",
                  "open_guide_after_stop", "auto_standalone", "confirm_delete", "keep_retired",
-                 "font_scale", "advanced_open", "check_updates", "theme", "tray_icon")
+                 "font_scale", "advanced_open", "check_updates", "theme", "tray_icon",
+                 "sync_kind", "sync_url", "sync_folder", "sync_host", "sync_port", "sync_user", "sync_remote",
+                 "sync_auto")
 #: Mêmes combinaisons que les raccourcis globaux, dans les fenêtres de StepWatch.
 LOCAL_HOTKEYS = {"pause": "Ctrl+Shift+F9", "note": "Ctrl+Shift+F10", "stop": "Ctrl+Shift+F11"}
 BASE_FONT_SIZE = 10
@@ -134,6 +136,8 @@ class StepWatchApp:
         self._update_dialog = None
         self._settings_dialog = None
         self._tray: QSystemTrayIcon | None = None
+        self._sync_job: sync.SyncJob | None = None
+        self._sync_automatic = False
         self._timer = QTimer()
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._poll)
@@ -660,6 +664,8 @@ class StepWatchApp:
             self._export_standalone()
         elif kind == "folder":
             self._open_session()
+        elif kind == "sync":
+            self.sync_guide()
         elif kind == "markdown" and self._session_dir is not None:
             try:
                 path = export_markdown(self._session_dir)
@@ -842,6 +848,9 @@ class StepWatchApp:
         self.name.set(expand_name(values["name_template"]))
         if values["auto_standalone"]:
             self._export_when_idle(attempts=100)
+        if values["sync_auto"] and sync.config_from_preferences(values) is not None:
+            # Après le rapport autonome éventuel, pour l'envoyer aussi.
+            self.after(300, lambda: self._sync_when_idle(attempts=600))
         if self._pending_release is not None:
             # Mise à jour trouvée pendant l'enregistrement : proposée maintenant.
             release, self._pending_release = self._pending_release, None
@@ -860,6 +869,81 @@ class StepWatchApp:
             return
         self._export_standalone()
 
+    def _sync_when_idle(self, attempts: int) -> None:
+        """Synchronisation automatique à l'arrêt, une fois rapports et relecture terminés."""
+        if self._closing or self._disposed or attempts <= 0 or self._active():
+            return
+        if self._background_running() or self._session_dir is None:
+            self.after(100, lambda: self._sync_when_idle(attempts - 1))
+            return
+        self.sync_guide(automatic=True)
+
+    def _sync_running(self) -> bool:
+        job = getattr(self, "_sync_job", None)
+        return job is not None and job.is_alive()
+
+    def sync_guide(self, directory: Path | None = None, automatic: bool = False) -> None:
+        """Envoie le guide ouvert vers le serveur configuré (Paramètres › Synchronisation)."""
+        directory = directory or self._session_dir
+        if directory is None or self._closing or self._sync_running() or self._active():
+            return
+        config = sync.config_from_preferences(self._prefs.values)
+        if config is None:
+            if not automatic:
+                messagebox.showinfo("Synchroniser le guide", "Aucune destination configurée : choisissez un "
+                                    "serveur dans Paramètres › Synchronisation.", parent=self.root)
+            return
+        try:
+            sync.validate(config)
+        except sync.SyncError as exc:
+            self._write_log(f"Synchronisation impossible : {exc}", level=logging.WARNING)
+            messagebox.showerror("Synchroniser le guide", str(exc), parent=self.root)
+            return
+        password = sync.get_password(config) if config.kind != "folder" else None
+        if config.needs_password and not password:
+            password = simpledialog.askstring(
+                "Synchroniser le guide", f"Mot de passe de {config.user} sur {config.label} :",
+                parent=self.root, password=True)
+            if not password:
+                self._write_log("Synchronisation annulée : mot de passe non fourni.")
+                return
+            sync.set_password(config, password)
+        self._sync_automatic = automatic
+        self._sync_job = sync.SyncJob(directory, config, password, self._background_events.put).start()
+        self._write_log(f"Synchronisation vers {config.label}…")
+        self._controls_key = None
+        self._update_controls()
+        self.state_text.set("Synchronisation du guide en cours…")
+
+    def _sync_event(self, event: dict) -> None:
+        kind = event["type"]
+        if kind == "sync_progress":
+            self.state_text.set(f"Synchronisation : {event['done']} / {event['total']} fichiers…")
+        elif kind == "sync_done":
+            result = event["result"]
+            self._write_log(f"Synchronisation terminée ({result.destination}) : {result.summary()}.")
+            if self._tray is not None and self._sync_automatic:
+                self._tray.showMessage("StepWatch", "Guide synchronisé sur le serveur.")
+        elif kind == "sync_host_key":
+            error = event["error"]
+            if not self._closing and messagebox.askyesno(
+                    "Serveur SFTP inconnu",
+                    f"Première connexion à {error.host}:{error.port}.\n\nEmpreinte {error.key_type} :\n"
+                    f"{error.fingerprint}\n\nComparez-la avec celle du serveur avant d’accepter. "
+                    "Faire confiance à ce serveur ?", parent=self.root):
+                sync.trust_host_key(error, sync.known_hosts_path())
+                self._write_log(f"Empreinte de {error.host} enregistrée : {error.fingerprint}.")
+                self.after(0, lambda: self.sync_guide(Path(event["directory"])))
+            else:
+                self._write_log("Synchronisation annulée : empreinte du serveur refusée.")
+        elif kind == "sync_error":
+            self._write_log(f"Synchronisation en échec : {event['message']}", level=logging.WARNING)
+            if not self._closing:
+                messagebox.showerror("Synchroniser le guide", f"{event['message']}\n\nLe guide reste complet "
+                                     "sur ce poste ; relancez la synchronisation depuis le menu Fichier.",
+                                     parent=self.root)
+        self._controls_key = None
+
     def _background_running(self) -> bool:
         return self._review.busy or any(thread is not None and thread.is_alive()
                                         for thread in (self._import_thread, self._export_thread))
@@ -873,7 +957,8 @@ class StepWatchApp:
             self._after_recording_stopped()
             busy = self._background_running()
         self._last_state = state
-        key = state, busy, self._closing, self._session_dir, self.source.get()
+        syncing = self._sync_running()
+        key = state, busy, self._closing, self._session_dir, self.source.get(), syncing
         if key == self._controls_key:
             return
         self.start_button.setEnabled(not (active or busy or self._backend is None))
@@ -884,8 +969,9 @@ class StepWatchApp:
         self.import_button.setEnabled(not (active or busy))
         self._review.open_button.setEnabled(not (active or busy))
         self.open_session_button.setEnabled(not (active or busy))
-        other_work = self._closing or any(thread is not None and thread.is_alive()
-                                          for thread in (self._import_thread, self._export_thread))
+        # Pas de modification du guide pendant son envoi : le serveur recevrait un mélange.
+        other_work = self._closing or syncing or any(thread is not None and thread.is_alive()
+                                                     for thread in (self._import_thread, self._export_thread))
         self._review.set_editable(not active and not other_work)
         self._set_status_colours("stopping" if self._closing else state)
         self.open_button.setEnabled(self._session_dir is not None)
@@ -903,6 +989,8 @@ class StepWatchApp:
             self.state_text.set("Import ShareX en cours…")
         elif self._export_thread is not None and self._export_thread.is_alive():
             self.state_text.set("Export du rapport autonome en cours…")
+        elif syncing and not active:
+            pass  # Progression affichée par les événements de synchronisation.
         elif state == "starting" and self._uses_portal:
             self.state_text.set("Choisissez l’écran ou la fenêtre à partager…")
         else:
@@ -941,6 +1029,8 @@ class StepWatchApp:
                 self._write_log(f"Rapport Markdown : {event['markdown']} (liens vers captures/).")
         elif event["type"] == "update":
             self._update_checked(event)
+        elif event["type"].startswith("sync_"):
+            self._sync_event(event)
         elif event["type"] == "selfcheck":
             self._write_log(event["message"])
             if not self._closing:
@@ -1017,6 +1107,7 @@ class StepWatchApp:
                 ("Exporter le rapport autonome", "Ctrl+E", self._export_standalone),
                 ("Exporter en Markdown", None, lambda: self._export_from_guide("markdown")),
                 ("Ouvrir le dossier du guide", None, self._open_session),
+                ("Synchroniser le guide", "Ctrl+Shift+S", lambda: self.sync_guide()),
                 None,
                 ("Paramètres…", "Ctrl+,", self._open_settings),
                 None,
@@ -1064,7 +1155,7 @@ class StepWatchApp:
         # Raccourcis propres à la fenêtre ; ceux de l'éditeur (Suppr, Ctrl+Z…) et
         # les raccourcis d'enregistrement sont gérés ailleurs, selon le contexte.
         window_shortcuts = {"Ctrl+O", "Ctrl+I", "Ctrl+E", "Ctrl+,", "Ctrl+Q", "Ctrl+R", "F5", "Ctrl+1", "Ctrl+2",
-                            "Ctrl+3", "F1"}
+                            "Ctrl+3", "F1", "Ctrl+Shift+S"}
         for title, entries in structure.items():
             menu = self.menubar.addMenu(title)
             menu.aboutToShow.connect(self._refresh_menus)
@@ -1138,6 +1229,8 @@ class StepWatchApp:
         for label in ("Exporter le rapport autonome", "Exporter en Markdown"):
             set_state("Fichier", label, self._session_dir is not None and not active and not busy)
         set_state("Fichier", "Ouvrir le dossier du guide", self._session_dir is not None)
+        set_state("Fichier", "Synchroniser le guide", self._session_dir is not None and not active and not busy
+                  and not self._sync_running())
         set_state("Enregistrement", "Démarrer l’enregistrement",
                   not active and not busy and self._backend is not None)
         for label in ("Pause / Reprendre", "Ajouter une note…", "Arrêter"):
@@ -1171,6 +1264,12 @@ class StepWatchApp:
             if key in values:
                 self._prefs.values[key] = values[key]
         prefs = self._prefs.values
+        password = values.get("sync_password") or ""
+        config = sync.config_from_preferences(prefs)
+        if password and config is not None and config.kind != "folder":
+            if not sync.set_password(config, password):
+                self._write_log("Coffre du système indisponible : le mot de passe sera demandé à chaque "
+                                "synchronisation.", level=logging.WARNING)
         self.output.set(prefs["output"])
         self.compact.set(prefs["compact"])
         if not self._active():
@@ -1385,7 +1484,8 @@ class StepWatchApp:
 
     def _show_window(self) -> None:
         self._withdrawn = False
-        self.root.showNormal()
+        # showNormal() seulement si réduite : une fenêtre maximisée le reste après la barre flottante.
+        self.root.showNormal() if self.root.isMinimized() else self.root.show()
         self.root.raise_()
         self.root.activateWindow()
 
@@ -1611,7 +1711,10 @@ class StepWatchApp:
                     except Exception:
                         pass
                     complete = False
-        for worker in (self._import_thread, self._export_thread):
+        sync_job = getattr(self, "_sync_job", None)
+        if sync_job is not None:
+            sync_job.cancel()
+        for worker in (self._import_thread, self._export_thread, sync_job.thread if sync_job else None):
             if worker is not None and worker is not threading.current_thread() and worker.is_alive():
                 worker.join(timeout=max(0, deadline - time.monotonic()))
                 if worker.is_alive():
@@ -1668,6 +1771,8 @@ class StepWatchApp:
                 parent=self.root):
             return
         self._closing = True
+        if self._sync_job is not None:
+            self._sync_job.cancel()  # Reprise des fichiers manquants à la prochaine synchronisation.
         try:
             self._store_preferences()
         except Exception:
@@ -1679,7 +1784,7 @@ class StepWatchApp:
         try:
             recorder_done = self._recorder is None or self._recorder.stop(timeout=0)
             self._update_controls()
-            background_done = not self._background_running()
+            background_done = not self._background_running() and not self._sync_running()
             if not recorder_done or not background_done:
                 return
             self.dispose()

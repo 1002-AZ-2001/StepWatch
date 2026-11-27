@@ -45,7 +45,8 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(tag, "v0.3.0")
         self.assertTrue(notes.startswith("- Nouveauté A."))
         self.assertNotIn("Ancienne entrée", notes)
-        for name in ("StepWatch-0.3.0-windows-x64.exe", "StepWatch-0.3.0-windows-x64-portable.zip",
+        for name in ("StepWatch-0.3.0-windows-x64.exe", "StepWatch-0.3.0-windows-x64-setup.exe",
+                     "StepWatch-0.3.0-windows-x64-portable.zip",
                      "stepwatch_0.3.0_amd64.deb", "stepwatch-0.3.0-1-x86_64.pkg.tar.zst",
                      "/blob/v0.3.0/docs/distribution.md"):
             self.assertIn(name, notes)

@@ -24,6 +24,7 @@ The latest release includes Windows executables, Linux packages and their checks
 
 | File | For |
 | --- | --- |
+| `StepWatch-VERSION-windows-x64-setup.exe` | **Windows 10/11 x64, recommended**: per-user installer (no administrator rights), uninstall from Windows Settings. |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, single file. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows x64, extract the entire portable folder. |
 | `stepwatch_VERSION_amd64.deb` | Debian 12+ and Ubuntu 22.04+. |
@@ -139,6 +140,10 @@ The menu bar offers **Fichier** (File: open, recent guides, ShareX import, expor
 ![Guide editor in the dark theme](docs/sombre.png)
 
 The theme follows the system by default; **Affichage › Thème** or **Paramètres › Interface** force light or dark. The notification area icon offers start, pause/resume, note, stop and quit without reopening the window (Windows, KDE, GNOME with the AppIndicator extension). Turn it off in **Paramètres › Interface**.
+
+## Sync to a NAS or Nextcloud
+
+**Paramètres › Synchronisation** uploads each guide to a file server, into `<destination>/<guide folder>/`: Nextcloud/WebDAV (HTTPS only, certificate checked; use a Nextcloud app password), a network folder (`\\nas\share`, or a mounted share on Linux) or SFTP (password or SSH key; the server fingerprint must be accepted once and a changed fingerprint is refused). Sync runs when recording stops (optional) or from **Fichier › Synchroniser le guide** (Ctrl+Shift+S). Screenshots go first, then reports, each under a temporary name then renamed; unchanged screenshots are skipped, so an interrupted sync resumes. Screenshots of removed steps are never uploaded and are deleted from the server. Passwords stay in the system keyring (Windows Credential Manager, GNOME Keyring, KWallet), never in `settings.json`.
 
 ## Automatic updates
 

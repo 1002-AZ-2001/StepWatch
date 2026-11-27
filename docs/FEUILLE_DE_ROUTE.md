@@ -2,6 +2,12 @@
 
 Ce document liste les versions livrées, puis les versions proposées, avec la valeur attendue et les limites de chaque chantier. Les priorités suivent deux critères : la protection des données des clients, et la possibilité de vérifier le travail sans poste Windows réel. Aucune date n'est promise.
 
+## Version 1.1 — synchronisation et confiance
+
+- Fait : synchronisation Nextcloud/WebDAV, dossier réseau et SFTP ; installateur Windows ; chargeur PyInstaller recompilé, sans UPX, informations de version ; CI prête pour SignPath ; correction de la fermeture involontaire en mode barre flottante.
+- À faire par le mainteneur : demande à la SignPath Foundation, puis variables `SIGNPATH_*` et secret `SIGNPATH_API_TOKEN` dans le dépôt.
+- À venir : synchronisation de tout le dossier des guides en une fois ; choix d'envoyer ou non le rapport autonome.
+
 ## Version 1.0 — interface Qt
 
 - Fait : interface réécrite avec PySide6 6.12 (Qt 6, LGPL) ; Wayland natif sans XWayland ; thème clair, sombre ou système ; icône dans la zone de notification ; traduction française des dialogues Qt ; tests de l'interface hors écran.

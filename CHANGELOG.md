@@ -4,6 +4,31 @@
 
 Rien pour l'instant.
 
+## 1.1.0 — 2026-11-27
+
+Synchronisation vers un serveur, installateur Windows, moins de faux positifs antivirus et corrections.
+
+- **Synchronisation des guides** (Paramètres › Synchronisation, Fichier › Synchroniser le guide, Ctrl+Maj+S) :
+  - destinations : Nextcloud ou WebDAV (HTTPS obligatoire, certificat vérifié), dossier réseau (NAS, `\\nas\partage`), serveur SFTP (mot de passe ou clé SSH) ;
+  - envoi automatique à l'arrêt de l'enregistrement, désactivable ; test de la connexion dans les Paramètres ;
+  - captures puis rapports, chaque fichier sous un nom temporaire puis renommé ; captures inchangées non renvoyées (reprise après coupure) ; un seul listage par dossier distant ;
+  - captures des étapes supprimées jamais envoyées et retirées du serveur ;
+  - SFTP : empreinte d'un serveur inconnu à confirmer, empreinte modifiée refusée ;
+  - mots de passe dans le coffre du système (keyring), jamais dans settings.json.
+  Validé contre Nextcloud 35 et un serveur OpenSSH réels.
+- **Installateur Windows** `StepWatch-VERSION-windows-x64-setup.exe` (Inno Setup) : installation dans le profil sans droits administrateur, menu Démarrer, désinstallation ; testé par la CI (installation silencieuse, auto-test, désinstallation). La mise à jour automatique le reconnaît et relance l'installateur en mode silencieux.
+- **Moins de faux positifs antivirus** :
+  - chargeur PyInstaller recompilé par la CI ;
+  - pas de compression UPX ;
+  - informations de version et icône dans les exécutables ;
+  - CI prête pour la signature gratuite de la SignPath Foundation (activée dès l'acceptation du projet) ;
+  - [politique de signature](CODE_SIGNING_POLICY.md) et guide [Antivirus et SmartScreen](docs/antivirus.md).
+- **Corrections** :
+  - en mode barre flottante, fermer la fenêtre « Ajouter une note » faisait quitter StepWatch en plein enregistrement (1.0.0) ;
+  - une fenêtre maximisée ne l'était plus après la barre flottante ;
+  - SFTP : l'empreinte d'un serveur sur un port autre que 22 était mal enregistrée (constaté sur un vrai serveur avant publication).
+- **Auto-test** : vérifie aussi la synchronisation et la présence des modules WebDAV, SFTP et du coffre.
+
 ## 1.0.0 — 2026-11-22
 
 Nouvelle interface Qt.
