@@ -66,6 +66,22 @@ def check_reports(base: Path) -> None:
     _check(len(list((imported / "captures").glob("*.png"))) == 3, "import ShareX incomplet")
 
 
+def check_sync(base: Path) -> None:
+    """Synchronisation d'un guide de test vers un dossier local ; modules WebDAV et SFTP chargés."""
+    from . import sync
+
+    store = SessionStore(base, "Auto-test synchronisation")
+    store.save(Image.new("RGB", (32, 24), "white"), "initial")
+    store.close()
+    destination = base / "serveur"
+    destination.mkdir()
+    result = sync.sync_guide(store.directory, sync.FolderTarget(destination))
+    _check(result.sent >= 3 and (destination / store.directory.name / "steps.json").is_file(),
+           "synchronisation vers un dossier incomplète")
+    import paramiko  # noqa: F401 - SFTP disponible dans le paquet
+    import keyring  # noqa: F401 - coffre du système disponible dans le paquet
+
+
 def check_interface(*, capture_x11: bool = False) -> None:
     """Ouvre la vraie fenêtre principale, la laisse se dessiner, puis la ferme."""
     from .qtcompat import application, process_events
@@ -113,6 +129,9 @@ def run(write: Callable[[str], None] | None = None) -> int:
         with tempfile.TemporaryDirectory(prefix="stepwatch-selftest-") as temporary:
             check_reports(Path(temporary))
         write("Images, rapports, notes et import ShareX : OK")
+        with tempfile.TemporaryDirectory(prefix="stepwatch-selftest-sync-") as temporary:
+            check_sync(Path(temporary))
+        write("Synchronisation (dossier, WebDAV, SFTP) : OK")
         problem = display_problem()
         if problem:
             write(f"Interface Qt : non vérifiée — {problem}")

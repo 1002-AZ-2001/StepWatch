@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows x64 — EXE et ZIP portable
+    name: Windows x64 — EXE, installateur et ZIP portable
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -53,6 +53,19 @@ jobs:
           & .\.venv\Scripts\python.exe -m pip install --no-deps -e .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Recompiler le chargeur PyInstaller depuis ses sources
+        # Le chargeur précompilé est partagé par de nombreux programmes, y compris
+        # malveillants : le recompiler donne une empreinte propre à StepWatch et
+        # réduit les faux positifs de certains antivirus (MSVC du runner).
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Select-String -Path requirements-dev.txt -Pattern '^PyInstaller==(.+)$').Matches[0].Groups[1].Value
+          & .\.venv\Scripts\python.exe -m pip uninstall -y PyInstaller
+          $env:PYINSTALLER_COMPILE_BOOTLOADER = '1'
+          & .\.venv\Scripts\python.exe -m pip install --no-cache-dir --no-binary=PyInstaller "PyInstaller==$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Tester et construire l'exécutable Windows
         shell: pwsh
         run: ./scripts/build.ps1 -SingleFile
@@ -73,6 +86,122 @@ jobs:
           $selftest = Start-Process -FilePath dist/StepWatch/StepWatch.exe -ArgumentList '--self-test' -Wait -PassThru
           if ($selftest.ExitCode -ne 0) { throw "Auto-test de l'exécutable en échec ($($selftest.ExitCode))." }
 
+          # Informations de version visibles dans les propriétés du fichier.
+          $info = (Get-Item dist/StepWatch/StepWatch.exe).VersionInfo
+          if ($info.ProductName -ne 'StepWatch' -or $info.ProductVersion -ne '${{ steps.metadata.outputs.version }}') {
+            throw "Informations de version absentes de l'exécutable : $($info | Format-List | Out-String)"
+          }
+
+      - name: Signer les exécutables (SignPath, si configuré)
+        # Activé quand les variables SIGNPATH_* et le secret SIGNPATH_API_TOKEN existent
+        # (signature gratuite de la SignPath Foundation pour les projets open source).
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        id: upload-unsigned
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stepwatch-windows-unsigned
+          path: |
+            dist/StepWatch/StepWatch.exe
+            dist/StepWatch-singlefile.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Demande de signature SignPath (exécutables)
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Remplacer par les exécutables signés
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item signed/StepWatch/StepWatch.exe dist/StepWatch/StepWatch.exe -Force
+          Copy-Item signed/StepWatch-singlefile.exe dist/StepWatch-singlefile.exe -Force
+          foreach ($file in 'dist/StepWatch/StepWatch.exe', 'dist/StepWatch-singlefile.exe') {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid') { throw "Signature invalide pour $file : $($signature.StatusMessage)" }
+          }
+
+      - name: Construire et tester l'installateur
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Find-Iscc {
+            $found = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+            if ($found) { return $found }
+            foreach ($root in ${env:ProgramFiles(x86)}, $env:ProgramFiles) {
+              $candidate = Get-ChildItem -Path $root -Filter ISCC.exe -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+                Where-Object { $_.DirectoryName -like '*Inno Setup*' } | Select-Object -First 1
+              if ($candidate) { return $candidate.FullName }
+            }
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = Find-Iscc
+          }
+          if (-not $iscc) { throw 'Inno Setup (ISCC.exe) introuvable.' }
+          Write-Host "Inno Setup : $iscc"
+          & $iscc "/DAppVersion=$env:APP_VERSION" "/DSourceDir=$PWD\dist\StepWatch" `
+            "/DOutputDir=$PWD\dist" "/DIconFile=$PWD\build\windows\stepwatch.ico" packaging\windows\stepwatch.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = "dist/StepWatch-$env:APP_VERSION-windows-x64-setup.exe"
+          # Installation silencieuse dans le profil, auto-test, puis désinstallation.
+          $target = Join-Path $env:RUNNER_TEMP 'StepWatch-installe'
+          $process = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$target" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installation en échec ($($process.ExitCode))." }
+          if (-not (Test-Path "$target\unins000.exe")) { throw 'Programme de désinstallation absent.' }
+          $selftest = Start-Process -FilePath "$target\StepWatch.exe" -ArgumentList '--self-test' -Wait -PassThru
+          if ($selftest.ExitCode -ne 0) { throw "Auto-test de la version installée en échec ($($selftest.ExitCode))." }
+          $process = Start-Process -FilePath "$target\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Désinstallation en échec ($($process.ExitCode))." }
+          Start-Sleep -Seconds 2
+          if (Test-Path "$target\StepWatch.exe") { throw 'StepWatch.exe est resté après la désinstallation.' }
+
+      - name: Signer l'installateur (SignPath, si configuré)
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        id: upload-unsigned-setup
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stepwatch-windows-setup-unsigned
+          path: dist/StepWatch-${{ steps.metadata.outputs.version }}-windows-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Demande de signature SignPath (installateur)
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-setup
+
+      - name: Remplacer par l'installateur signé
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = 'StepWatch-${{ steps.metadata.outputs.version }}-windows-x64-setup.exe'
+          Copy-Item "signed-setup/$name" "dist/$name" -Force
+          $signature = Get-AuthenticodeSignature "dist/$name"
+          if ($signature.Status -ne 'Valid') { throw "Signature invalide : $($signature.StatusMessage)" }
+
       - name: Préparer les fichiers téléchargeables
         shell: pwsh
         env:
@@ -81,6 +210,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path artifacts | Out-Null
           Copy-Item dist/StepWatch-singlefile.exe "artifacts/StepWatch-$env:APP_VERSION-windows-x64.exe"
+          Copy-Item "dist/StepWatch-$env:APP_VERSION-windows-x64-setup.exe" artifacts/
           Compress-Archive -Path dist/StepWatch -DestinationPath "artifacts/StepWatch-$env:APP_VERSION-windows-x64-portable.zip"
           # Format of sha256sum: "<hash>  <file>", verifiable with sha256sum -c.
           $lines = Get-ChildItem artifacts -File | Sort-Object Name | ForEach-Object {
@@ -172,6 +302,7 @@ jobs:
           test -r /opt/stepwatch/_internal/stepwatch/_wayland_portal.py
           .venv/bin/python scripts/smoke_linux_bundle.py /opt/stepwatch/StepWatch
           stepwatch --self-test | tee selftest.log
+          grep -q "Synchronisation (dossier, WebDAV, SFTP) : OK" selftest.log
           grep -q "Interface Qt : OK" selftest.log
           grep -q "Capture X11 : OK" selftest.log
 

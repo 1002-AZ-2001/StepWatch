@@ -56,6 +56,10 @@ def application(argv: list[str] | None = None) -> QApplication:
         app.setOrganizationName("StepWatch")
         # Identifiant Wayland (app_id) et nom du fichier .desktop.
         app.setDesktopFileName(APP_ID)
+        # Pendant un enregistrement, seule la barre flottante (fenêtre outil) est visible :
+        # fermer la fenêtre « Ajouter une note » ferait quitter Qt. StepWatch quitte
+        # uniquement par sa propre fermeture (arrêt de l'enregistrement, rapports finalisés).
+        app.setQuitOnLastWindowClosed(False)
         _install_french_translation(app)
     return app
 
@@ -200,10 +204,12 @@ class filedialog:  # noqa: N801
 
 class simpledialog:  # noqa: N801
     @staticmethod
-    def askstring(title: str, prompt: str, parent=None) -> str | None:
+    def askstring(title: str, prompt: str, parent=None, password: bool = False) -> str | None:
         dialog = QInputDialog(_parent(parent))
         dialog.setWindowTitle(title)
         dialog.setLabelText(prompt)
+        if password:
+            dialog.setTextEchoMode(QLineEdit.EchoMode.Password)
         dialog.setOkButtonText("OK")
         dialog.setCancelButtonText("Annuler")
         dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)

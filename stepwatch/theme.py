@@ -220,8 +220,14 @@ def render_icon(size: int) -> Image.Image:
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
+_ICON = None
+
+
 def qicon():
-    """Icône de fenêtre Qt (plusieurs tailles)."""
+    """Icône de fenêtre Qt (plusieurs tailles), dessinée une seule fois."""
+    global _ICON
+    if _ICON is not None:
+        return _ICON
     from PySide6.QtGui import QIcon
 
     from .qtcompat import to_pixmap
@@ -229,6 +235,7 @@ def qicon():
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256):
         icon.addPixmap(to_pixmap(render_icon(size)))
+    _ICON = icon
     return icon
 
 

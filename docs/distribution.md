@@ -4,6 +4,7 @@ Chaque version publiée se trouve dans les [Releases GitHub](https://github.com/
 
 | Fichier | Usage |
 | --- | --- |
+| `StepWatch-VERSION-windows-x64-setup.exe` | Windows 10/11 x64, installateur (Inno Setup) recommandé : installation dans `%LOCALAPPDATA%\Programs\StepWatch` sans droits administrateur, menu Démarrer, désinstallation depuis les Paramètres de Windows. Installation silencieuse : `/VERYSILENT /SUPPRESSMSGBOXES`. |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, un seul fichier. Il extrait son environnement dans un dossier temporaire au lancement : le premier démarrage peut être plus lent. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows, dossier portable : extraire puis lancer `StepWatch\StepWatch.exe`. Conserver le dossier entier. |
 | `stepwatch_VERSION_amd64.deb` | Debian 12+ ou Ubuntu 22.04+, amd64. |

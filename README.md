@@ -22,13 +22,14 @@ La dernière Release fournit les exécutables Windows, les paquets Linux et leur
 
 | Fichier | Pour |
 | --- | --- |
+| `StepWatch-VERSION-windows-x64-setup.exe` | **Windows 10/11 x64, recommandé** : installateur sans droits administrateur, désinstallation depuis les Paramètres de Windows. |
 | `StepWatch-VERSION-windows-x64.exe` | Windows 10/11 x64, exécutable sans installation. |
 | `StepWatch-VERSION-windows-x64-portable.zip` | Windows x64, dossier portable à extraire en entier. |
 | `stepwatch_VERSION_amd64.deb` | Debian 12+ et Ubuntu 22.04+. |
 | `stepwatch-VERSION-1-x86_64.pkg.tar.zst` | Arch Linux. |
 | `SHA256SUMS-*.txt` | Vérification des téléchargements. |
 
-Python est inclus. Les exécutables Windows ne sont pas encore signés : SmartScreen peut afficher un avertissement, donc vérifiez d'abord le SHA-256. Les commandes d'installation et de vérification, ainsi que la construction depuis les sources, sont dans le [guide de distribution](docs/distribution.md).
+Python est inclus. Les exécutables Windows ne sont pas encore signés (demande en cours auprès de la SignPath Foundation) : SmartScreen ou un antivirus peut afficher un avertissement, donc vérifiez d'abord le SHA-256. [Antivirus et SmartScreen](docs/antivirus.md) Les commandes d'installation et de vérification, ainsi que la construction depuis les sources, sont dans le [guide de distribution](docs/distribution.md).
 
 ```bash
 # Debian ou Ubuntu, après téléchargement du .deb
@@ -120,7 +121,7 @@ Sous Windows, les trois raccourcis d'enregistrement fonctionnent dans toutes les
 
 | Menu | Contenu |
 | --- | --- |
-| **Fichier** | Ouvrir un guide (Ctrl+O), guides récents, importer ShareX (Ctrl+I), exporter le rapport autonome (Ctrl+E) ou le Markdown, ouvrir le dossier du guide, **Paramètres…** (Ctrl+,), quitter (Ctrl+Q). |
+| **Fichier** | Ouvrir un guide (Ctrl+O), guides récents, importer ShareX (Ctrl+I), exporter le rapport autonome (Ctrl+E) ou le Markdown, ouvrir le dossier du guide, **synchroniser le guide** (Ctrl+Maj+S), **Paramètres…** (Ctrl+,), quitter (Ctrl+Q). |
 | **Enregistrement** | Démarrer (Ctrl+R), pause/reprise, note, arrêt, actualiser les cibles (F5), barre flottante. |
 | **Guide** | Annuler, modifier le titre, monter, descendre, masquer une zone, supprimer l'étape. |
 | **Affichage** | Onglets Enregistrer, Guide et Journal (Ctrl+1, 2, 3), réglages avancés, thème (comme le système, clair, sombre). |
@@ -138,6 +139,7 @@ Les entrées indisponibles (pendant un enregistrement, sans guide ouvert…) son
 | Enregistrement | Barre flottante et sa position (en bas ou en haut de l'écran) ; raccourcis globaux sous Windows ; signal sonore à chaque étape. |
 | Guide et rapports | Ouvrir l'onglet Guide à l'arrêt ; créer le rapport autonome automatiquement à l'arrêt ; confirmer une suppression ; conserver ou effacer la capture d'une étape supprimée. |
 | Interface | Thème (comme le système, clair, sombre) et taille du texte (90 à 130 %), appliqués immédiatement ; réglages avancés ouverts au démarrage ; icône dans la zone de notification. |
+| Synchronisation | Destination (Nextcloud/WebDAV, dossier réseau, SFTP), identifiants, envoi automatique à l'arrêt, test de la connexion. |
 
 **Réinitialiser** revient aux valeurs par défaut en gardant la liste des guides récents. Si vous choisissez d'effacer la capture d'une étape supprimée, StepWatch demande toujours confirmation, et cette suppression ne peut pas être annulée.
 
@@ -149,6 +151,25 @@ StepWatch retient aussi d'un lancement à l'autre la cible, le mode, les réglag
 
 Le thème suit celui du système par défaut ; **Affichage › Thème** ou **Paramètres › Interface** le fixent en clair ou en sombre. L'icône de StepWatch dans la zone de notification (barre des tâches de Windows, KDE, GNOME avec l'extension AppIndicator) donne accès à **Démarrer l'enregistrement**, **Pause / Reprendre**, **Ajouter une note**, **Arrêter** et **Quitter** sans rouvrir la fenêtre. Elle se désactive dans **Paramètres › Interface**.
 
+## Synchroniser vers un NAS ou Nextcloud
+
+![Paramètres › Synchronisation](docs/synchronisation.png)
+
+**Paramètres › Synchronisation** envoie chaque guide vers un serveur de fichiers, dans `<destination>/<dossier du guide>/` : captures, `rapport.html`, `rapport.md`, `steps.json` et le rapport autonome s'il existe.
+
+| Destination | Exemple | Identification |
+| --- | --- | --- |
+| **Nextcloud ou WebDAV** (ownCloud, Synology, QNAP…) | `https://cloud.exemple.fr/remote.php/dav/files/utilisateur/StepWatch` | Utilisateur et mot de passe ; avec Nextcloud, un [mot de passe d'application](https://docs.nextcloud.com/server/latest/user_manual/fr/files/access_webdav.html). HTTPS obligatoire, certificat vérifié. |
+| **Dossier réseau (NAS)** | `\\nas\interventions` (Windows), `/mnt/nas/interventions` (partage monté sous Linux) | Celle du système. |
+| **Serveur SFTP** | `nas.local`, port 22, dossier `/volume1/interventions` | Mot de passe ou clé SSH. À la première connexion, StepWatch affiche l'empreinte du serveur ; une empreinte modifiée ensuite est refusée. |
+
+- **Quand** : à l'arrêt de l'enregistrement (désactivable), ou **Fichier › Synchroniser le guide** (Ctrl+Maj+S) et le menu **Exporter le guide** de l'onglet Guide. Rien n'est envoyé pendant l'enregistrement.
+- **Comment** : captures d'abord, rapports ensuite ; chaque fichier sous un nom temporaire puis renommé, pour qu'un rapport ne pointe jamais vers une capture absente. Une capture déjà présente avec la même taille n'est pas renvoyée : une synchronisation interrompue reprend où elle s'était arrêtée.
+- **Étapes supprimées** : leurs captures (`captures/retirees/`) ne sont jamais envoyées, et celles qui ne figurent plus dans le guide sont retirées du serveur.
+- **Mots de passe** : rangés dans le coffre du système (Gestionnaire d'identification Windows, trousseau GNOME ou KWallet), jamais dans `settings.json`. Sans coffre, le mot de passe est demandé à chaque synchronisation.
+
+Les captures peuvent contenir des données de vos clients : choisissez un serveur de confiance. Pendant l'envoi, le guide ne peut pas être modifié ; en cas d'échec, il reste complet sur le poste.
+
 ## Mises à jour automatiques
 
 ![Fenêtre de mise à jour pendant le téléchargement](docs/mise-a-jour.png)
@@ -157,6 +178,7 @@ Au démarrage, au plus une fois par jour, StepWatch demande à GitHub la derniè
 
 | Installation | Mise à jour |
 | --- | --- |
+| Installateur Windows (`setup.exe`) | Le nouvel installateur s'exécute en mode silencieux après la fermeture de StepWatch, dans le même dossier, puis l'application redémarre. |
 | Exécutable Windows (`.exe`) | Le fichier est remplacé, l'ancien est effacé au démarrage suivant. Le nom du fichier ne change pas. |
 | Dossier portable Windows (`.zip`) | Les fichiers du dossier sont remplacés après la fermeture de StepWatch, puis l'application redémarre. Les autres fichiers du dossier sont conservés. |
 | Paquet Debian / Ubuntu ou Arch Linux | `apt-get install` ou `pacman -U` via `pkexec` : le mot de passe administrateur est demandé. |
@@ -164,7 +186,7 @@ Au démarrage, au plus une fois par jour, StepWatch demande à GitHub la derniè
 
 Avant toute installation, le fichier téléchargé est comparé à deux sommes SHA-256 : celle que GitHub calcule pour chaque fichier publié, et celle du fichier `SHA256SUMS` de la version. Un écart, une somme absente ou un téléchargement incomplet annule la mise à jour, et la version installée reste en place. Ces sommes détectent un fichier corrompu ou modifié en chemin. Elles ne protègent pas contre une version publiée par une personne qui prendrait le contrôle du dépôt : les fichiers ne sont pas encore signés.
 
-C'est le seul accès réseau de StepWatch : une requête à l'API publique des versions de GitHub, qui voit l'adresse IP du poste. Aucune capture, aucun journal ni aucun identifiant n'est envoyé. Décochez **Paramètres › Général › Rechercher les mises à jour au démarrage** pour ne vérifier que sur demande. Si l'exécutable est dans un dossier protégé (`C:\Program Files`, par exemple), StepWatch indique qu'il faut le remplacer manuellement.
+En dehors de la synchronisation que vous configurez, c'est le seul accès réseau de StepWatch : une requête à l'API publique des versions de GitHub, qui voit l'adresse IP du poste. Aucune capture, aucun journal ni aucun identifiant n'est envoyé. Décochez **Paramètres › Général › Rechercher les mises à jour au démarrage** pour ne vérifier que sur demande. Si l'exécutable est dans un dossier protégé (`C:\Program Files`, par exemple), StepWatch indique qu'il faut le remplacer manuellement.
 
 ## Captures et rapports
 

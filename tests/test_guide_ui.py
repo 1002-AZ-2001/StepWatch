@@ -250,6 +250,37 @@ class GuideInterfaceTests(unittest.TestCase):
         bar.stop_button.click()
         self.pump(lambda: self.app._bar is None and self.app.root.isVisible())
 
+    def test_closing_the_note_dialog_from_the_bar_does_not_quit_stepwatch(self):
+        # Régression 1.0.0 : seule la barre (fenêtre outil) restait visible ; fermer la
+        # boîte « Ajouter une note » déclenchait lastWindowClosed et Qt quittait l'application.
+        self.assertFalse(QApplication.instance().quitOnLastWindowClosed())
+        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtWidgets import QInputDialog
+        recorder = FakeRecorder()
+        self.app._recorder = recorder
+        self.app._compact_session = True
+        self.pump(lambda: self.app._bar is not None and not self.app.root.isVisible())
+        quitting = []
+        QApplication.instance().aboutToQuit.connect(lambda: quitting.append(True))
+        dialog = QInputDialog(self.app._bar)
+        dialog.show()
+        loop = QEventLoop()
+        QTimer.singleShot(50, dialog.reject)
+        QTimer.singleShot(300, loop.quit)
+        loop.exec()
+        self.assertEqual(quitting, [])
+        self.assertEqual(recorder.state, "recording")
+
+    def test_maximized_window_stays_maximized_after_the_floating_bar(self):
+        self.app.root.showMaximized()
+        recorder = FakeRecorder()
+        self.app._recorder = recorder
+        self.app._compact_session = True
+        self.pump(lambda: self.app._bar is not None)
+        recorder.stop()
+        self.pump(lambda: self.app._bar is None and self.app.root.isVisible())
+        self.assertTrue(self.app.root.isMaximized())
+
     def test_floating_bar_position_follows_the_setting(self):
         self.app._prefs.values["bar_position"] = "haut"
         recorder = FakeRecorder()

@@ -265,6 +265,7 @@ class SessionReview(QWidget):
         self.export_menu = QMenu(self.export_button)
         for label, kind in (("Rapport autonome (HTML, un seul fichier)", "standalone"),
                             ("Markdown (rapport.md)", "markdown"),
+                            ("Synchroniser vers le serveur", "sync"),
                             ("Ouvrir le dossier du guide", "folder")):
             self.export_menu.addAction(label, lambda kind=kind: self._export and self._export(kind))
         self.export_button.setMenu(self.export_menu)

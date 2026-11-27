@@ -49,6 +49,16 @@ DEFAULTS: dict[str, Any] = {
     "font_scale": 100,
     "theme": "systeme",
     "tray_icon": True,
+    # Synchronisation (Paramètres › Synchronisation). Jamais de mot de passe ici :
+    # il reste dans le coffre du système.
+    "sync_kind": "",
+    "sync_url": "",
+    "sync_folder": "",
+    "sync_host": "",
+    "sync_port": "22",
+    "sync_user": "",
+    "sync_remote": "",
+    "sync_auto": True,
     # Mises à jour (Paramètres › Général, menu Aide).
     "check_updates": True,
     "last_update_check": "",
@@ -60,6 +70,7 @@ CHOICES: dict[str, tuple] = {
     "bar_position": ("bas", "haut"),
     "font_scale": (90, 100, 115, 130),
     "theme": ("systeme", "clair", "sombre"),
+    "sync_kind": ("", "webdav", "folder", "sftp"),
 }
 
 
