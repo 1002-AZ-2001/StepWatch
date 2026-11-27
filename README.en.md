@@ -171,6 +171,16 @@ StepWatch remembers the guides folder, target, mode, advanced settings, masks, f
 
 The local log `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/stepwatch/` on Linux) rotates over at most 4 files of 1 MB. `crash.log` collects native crashes. These files contain no image or keystroke, but may contain session names, window titles and paths: review them before sharing.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) (application pending).
+
+- Roles: author, reviewer and approver of every release: [@1002-AZ-2001](https://github.com/1002-AZ-2001).
+- Only files built by the public [build.yml](.github/workflows/build.yml) workflow on GitHub-hosted runners are signed, after manual approval of each release.
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it (update check, which can be turned off, and sync to the server you configure).
+
+Details: [code signing policy](CODE_SIGNING_POLICY.md).
+
 ## Development and next steps
 
 - [Architecture](docs/architecture.md): modules, threads and guarantees.
