@@ -222,6 +222,16 @@ Si un antivirus ou un outil de synchronisation verrouille brièvement un fichier
 
 Le journal local `%LOCALAPPDATA%\StepWatch\logs\stepwatch.log` (`~/.local/state/stepwatch/` sous Linux) tourne sur 4 fichiers de 1 Mo au plus. `crash.log` recueille les plantages natifs. Ces fichiers ne contiennent ni image ni frappe, mais peuvent contenir des noms d'intervention, des titres de fenêtres et des chemins : relisez-les avant de les transmettre.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) — signature des exécutables Windows demandée auprès de la SignPath Foundation (en attente d'acceptation).
+
+- Rôles : auteur, relecteur et approbateur de chaque version : [@1002-AZ-2001](https://github.com/1002-AZ-2001).
+- Seuls les fichiers construits par le workflow public [build.yml](.github/workflows/build.yml) sur des machines GitHub sont signés, après approbation manuelle de chaque version.
+- Vie privée : This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. En pratique : recherche des mises à jour (désactivable) et synchronisation vers le serveur que vous configurez.
+
+Détails : [politique de signature](CODE_SIGNING_POLICY.md).
+
 ## Développement et suite
 
 - [Architecture](docs/architecture.md) : modules, threads et garanties.

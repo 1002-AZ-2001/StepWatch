@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Configuration d'artefact SignPath pour StepWatch (à coller dans SignPath :
+  projet › Artifact configurations › Edit). La CI envoie deux archives :
+  - stepwatch-windows-unsigned : StepWatch/StepWatch.exe et StepWatch-singlefile.exe ;
+  - stepwatch-windows-setup-unsigned : StepWatch-VERSION-windows-x64-setup.exe.
+  Tous les .exe de l'archive sont signés (Authenticode). Le nom de produit
+  « StepWatch » est exigé, comme le demande la SignPath Foundation.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="**/*.exe" min-matches="1" max-matches="unbounded" product-name="StepWatch" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>
